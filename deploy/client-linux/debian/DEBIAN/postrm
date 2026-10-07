@@ -1,0 +1,17 @@
+#!/bin/sh
+# M4-03 postrm：remove 保留状态目录；purge 全清（/etc/p2p-client 含 state.json 设备注册态/
+# 凭据/peers.json/lan-segments.json/logs——03 §5 Linux 单数据目录口径，清即重装须重新向导注册）。
+set -e
+
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+  systemctl daemon-reload || true
+fi
+
+if [ "$1" = purge ]; then
+  if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl disable p2p-client.service >/dev/null 2>&1 || true
+  fi
+  rm -rf /etc/p2p-client
+fi
+
+#DEBHELPER#

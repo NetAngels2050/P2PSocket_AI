@@ -1,0 +1,10 @@
+Package: p2p-client
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: amd64
+Depends: iproute2
+Maintainer: P2P <admin@p2p.invalid>
+Description: P2P virtual NIC port-mapping tunnel client
+ Client daemon with local web console on http://127.0.0.1:7100 (loopback only).
+ Program dir /usr/lib/p2p-client, state dir /etc/p2p-client (0700, purge only).

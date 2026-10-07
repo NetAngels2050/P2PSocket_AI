@@ -61,13 +61,35 @@ run_server() {
   archive server
   STATUS="$STATUS server(v$VERSION)"
 }
+run_win_setup() { # M4-02：Inno Setup 安装包（依赖 client-win 产物；ISCC 缺失=环境依赖如实标注）
+  run_client_win
+  ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+  if [ ! -f "$ISCC" ]; then
+    ISCC="/c/Program Files/Inno Setup 6/ISCC.exe"
+  fi
+  if [ ! -f "$ISCC" ]; then # winget 用户级安装位（JRSoftware.InnoSetup 默认）
+    ISCC="$LOCALAPPDATA/Programs/Inno Setup 6/ISCC.exe"
+  fi
+  if [ -f "$ISCC" ]; then
+    echo "==> ISCC 编译 P2PClient.iss → out/P2PClient-Setup-$VERSION-x64.exe"
+    "$ISCC" //DPkgVersion="$VERSION" deploy/client/win/P2PClient.iss || { echo "ISCC 编译失败"; exit 1; }
+    test -f "out/P2PClient-Setup-$VERSION-x64.exe" \
+      || { echo "产物校验失败：out/P2PClient-Setup-$VERSION-x64.exe 缺失"; exit 1; }
+    STATUS="$STATUS win-setup(v$VERSION)"
+  else
+    echo "警告：ISCC.exe 不存在（Inno Setup 6 未安装，winget install JRSoftware.InnoSetup）——"
+    echo "      跳过安装包编译（环境依赖，M4-02 清单 §8.2）；deploy/client/win/P2PClient.iss 为交付物"
+    STATUS="$STATUS win-setup(跳过：ISCC 未装)"
+  fi
+}
 
 case "$TARGET" in
   client-win) run_client_win ;;
   client-linux) run_client_linux ;;
   server) run_server ;;
+  win-setup) run_win_setup ;;
   all) run_client_win; run_client_linux; run_server ;;
-  *) echo "未知目标：$TARGET（支持 client-win|client-linux|server|all）"; exit 1 ;;
+  *) echo "未知目标：$TARGET（支持 client-win|client-linux|server|win-setup|all）"; exit 1 ;;
 esac
 
 echo "==> 打包完成：$STATUS"

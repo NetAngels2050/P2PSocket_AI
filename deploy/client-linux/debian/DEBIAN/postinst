@@ -1,0 +1,21 @@
+#!/bin/sh
+# M4-03 postinst（NFR-33、08 §3.2）：数据目录权限+systemd 装载+升级重启。
+# 首装不 start——须向导注册（Web 控制台 http://127.0.0.1:7100）后 systemctl start；
+# 升级若服务在跑则 restart（dpkg 解包替换二进制走新 inode，旧进程持旧 inode 继续跑，
+# restart 点即切换新版——prerm 不停服务的 POSIX 替换语义）。
+set -e
+
+if [ "$1" = configure ]; then
+  install -d -m 0700 /etc/p2p-client
+  chmod 0700 /etc/p2p-client 2>/dev/null || true  # 已存在目录 install -d 不改权限，兜底
+
+  if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload
+    systemctl enable p2p-client.service >/dev/null || true
+    if systemctl is-active --quiet p2p-client.service; then
+      systemctl restart p2p-client.service
+    fi
+  fi
+fi
+
+#DEBHELPER#

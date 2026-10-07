@@ -1,0 +1,10 @@
+#!/bin/sh
+# M4-03 prerm：仅 remove（卸载）停服务；upgrade 不停（POSIX inode 替换+postinst restart 切版）。
+# 不清 /etc/p2p-client——去留归 postrm（remove 保留 / purge 清除），A-11 双路径语义。
+set -e
+
+if [ "$1" = remove ] && [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+  systemctl stop p2p-client.service || true
+fi
+
+#DEBHELPER#

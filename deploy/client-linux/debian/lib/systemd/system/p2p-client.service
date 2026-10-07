@@ -1,0 +1,19 @@
+# M4-03 deb 打包版 systemd 单元（NFR-33、08 §3.2；对齐 deploy/client/p2p-client.service
+# 既有已验证口径，仅 ExecStart 指向 deb 安装位 /usr/lib/p2p-client）。
+# 手工部署口径仍用 deploy/client/p2p-client.service（ExecStart=/usr/bin/p2p-client 直装位）。
+[Unit]
+Description=P2P Client (virtual NIC + port mapping tunnel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/p2p-client/p2p-client
+# 崩溃自愈（FR-C902，01 §4.2）：恒定重启，5s 间隔
+Restart=always
+RestartSec=5
+# 状态目录（03 §5）：/etc/p2p-client 0700 root（postinst 创建）
+RuntimeDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target
