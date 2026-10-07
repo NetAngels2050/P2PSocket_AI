@@ -15,7 +15,11 @@ public sealed record DashboardView(
     MappingsSummaryView Mappings,
     RelaySnapshotView Relay,
     StunSnapshotView Stun,
-    PunchStatsView Punch);
+    PunchStatsView Punch,
+    ServerVersionView Version);
+
+/// <summary>服务端宿主版本（M4-01：Directory.Build.props 注入，仪表盘角标展示）。</summary>
+public sealed record ServerVersionView(string Version, string Commit, string BuildDate);
 
 /// <summary>映射概览：enabled 计数 + TD-22 口径状态分布（direct/relay/failed/invalid/unknown 五桶）。</summary>
 public sealed record MappingsSummaryView(int Total, int Enabled, Dictionary<string, int> ByStatus);

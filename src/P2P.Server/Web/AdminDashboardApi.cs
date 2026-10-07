@@ -8,6 +8,7 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using P2P.Core;
 using P2P.Server.Data;
 using P2P.Server.Services;
 
@@ -85,7 +86,10 @@ public sealed class AdminDashboardApi(
                         Relay24h: relayed,
                         Failed24h: total - direct - relayed,
                         SuccessRate24h: total == 0 ? null : (direct + relayed) / (double)total,
-                        Hourly: buckets)), // 24 桶（最旧→最新，整点对齐）：折线数据源
+                        Hourly: buckets), // 24 桶（最旧→最新，整点对齐）：折线数据源
+                    Version: new ServerVersionView(
+                        Version: AppVersion.Version, Commit: AppVersion.Commit,
+                        BuildDate: AppVersion.BuildDate)), // M4-01 宿主版本（仪表盘角标）
             }, ctx.RequestAborted);
         });
     }

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  M4-01 版本与构建元数据注入（08 §1）：src 下全部工程统一。
+  - Version=1.0.0（M4 清单编制定案：M4=首个完整交付版本，后续手动递进）；
+  - git 短哈希 + 构建时间写入 ThisAssembly.Metadata（GitCommit/BuildDate）；
+    SOURCE_DATE_EPOCH 存在时以其值作为 BuildDate（可重现构建口径），否则取当前 UTC；
+  - git 不可用（源码包构建）容错为 unknown，不阻断构建。
+  tests/ 与 web/ 不在本文件作用域（无需注入）。
+-->
+<Project>
+  <!-- 显式导入仓库根 props（AI-01 TargetFramework/TreatWarningsAsErrors 等）——
+       MSBuild 只取最近一层 Directory.Build.props，不显式导入会遮蔽根层 -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <Version>1.0.0</Version>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <Target Name="InjectBuildMetadata" BeforeTargets="PrepareForBuild" Condition="'$(GitCommit)' == ''">
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_GitCommitRaw" />
+    </Exec>
+    <PropertyGroup>
+      <GitCommit Condition="'$(_GitCommitRaw)' != ''">$(_GitCommitRaw.Trim())</GitCommit>
+      <GitCommit Condition="'$(GitCommit)' == ''">unknown</GitCommit>
+      <BuildDate Condition="'$(SOURCE_DATE_EPOCH)' != ''">$(SOURCE_DATE_EPOCH)</BuildDate>
+      <BuildDate Condition="'$(BuildDate)' == ''">$([System.DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))</BuildDate>
+    </PropertyGroup>
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>GitCommit</_Parameter1>
+        <_Parameter2>$(GitCommit)</_Parameter2>
+      </AssemblyAttribute>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>BuildDate</_Parameter1>
+        <_Parameter2>$(BuildDate)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+  </Target>
+</Project>

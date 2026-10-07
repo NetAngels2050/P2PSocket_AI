@@ -40,6 +40,13 @@ onUnmounted(() => dashboard.stopPolling());
     v-if="data"
     class="dashboard"
   >
+    <!-- 宿主版本角标（M4-01：dashboard.version，08 §1 注入） -->
+    <div
+      class="version-badge"
+      data-testid="server-version"
+    >
+      p2p-server v{{ data.version.version }}（{{ data.version.commit }}）
+    </div>
     <div class="cards">
       <el-card data-testid="dash-online">
         <template #header>
@@ -148,5 +155,10 @@ onUnmounted(() => dashboard.stopPolling());
   font-size: 13px;
   color: var(--el-text-color-secondary);
   margin: 6px 0 0;
+}
+.version-badge {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin: 0 0 12px;
 }
 </style>

@@ -861,6 +861,16 @@ describe("Settings 走查", () => {
     expect(wrapper.find('[data-testid="settings-save"]').attributes("disabled")).toBeDefined();
   });
 
+  it("M4-01 关于区：版本/构建提交/协议版本三行（state.version+commit）", async () => {
+    const { wrapper } = await mountPage(Settings, undefined, "/settings");
+
+    const about = wrapper.find('[data-testid="about-box"]');
+    expect(about.exists()).toBe(true);
+    expect(wrapper.find('[data-testid="about-version"]').text()).toBe("v1.0.0");
+    expect(about.text()).toContain("m401mock"); // 构建提交（mock 固定值）
+    expect(about.text()).toContain("协议版本");
+  });
+
   it("M3-15 stun-test 判型卡：两桶族标签+TCP 分配规律+注记渲染", async () => {
     const { wrapper } = await mountPage(Settings, undefined, "/settings");
 

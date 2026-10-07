@@ -253,6 +253,12 @@ public sealed class AdminDashboardApiTests : IAsyncLifetime
         Assert.Equal(1, seedBucket.GetProperty("success").GetInt32());
         var excludedHour = new DateTimeOffset(TruncateHour(now.AddHours(-25))).ToUnixTimeMilliseconds();
         Assert.DoesNotContain(excludedHour, starts); // 窗外小时不入桶集
+
+        // ⑦ 宿主版本（M4-01）：三段式语义版本 + 构建元数据非空（Directory.Build.props 注入）
+        var version = data.GetProperty("version");
+        Assert.Matches(@"^\d+\.\d+\.\d+$", version.GetProperty("version").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(version.GetProperty("commit").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(version.GetProperty("buildDate").GetString()));
     }
 
     [Fact]

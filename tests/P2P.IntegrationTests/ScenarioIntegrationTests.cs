@@ -1489,9 +1489,11 @@ public sealed class ScenarioIntegrationTests : IAsyncLifetime
         // WS 收件箱先建（后续每次 GET /api/system/state 现场重算驱动值变化→广播 subnet_conflict）
         await using var tap = await WsTap.ConnectAsync($"ws://127.0.0.1:{httpA.BaseAddress!.Port}/ws/status");
 
-        // ① 无冲突静默：conflict=null
+        // ① 无冲突静默：conflict=null；M4-01 版本字段（08 §1 注入，Settings 关于区数据源）
         var state = (await GetAsync(httpA, "/api/system/state")).GetProperty("data");
         Assert.Equal(JsonValueKind.Null, state.GetProperty("conflict").ValueKind);
+        Assert.Matches(@"^\d+\.\d+\.\d+$", state.GetProperty("version").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(state.GetProperty("commit").GetString()));
 
         // ② 注入冲突：外部接口地址落段内 → API 可见 + WS hasConflict=true
         addresses.Add(new SurveyAddress("eth9", IPAddress.Parse("127.0.0.99")));

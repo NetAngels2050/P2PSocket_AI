@@ -6,11 +6,13 @@
 // - GET /api/device：state.json 三要素 + 登录账号 + 能力模式；
 // - PUT /api/device：0x13 改名（空名 1001；passive 本地拒 2002）。
 // reset-remote-code（0x14）→ DeviceApi（M2-15）；settings GET/PUT → 配置任务。
+// M4-01 增 version/commit（08 §1：Directory.Build.props 注入，Settings 关于区展示）。
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using P2P.Client.Control;
 using P2P.Client.Nic;
 using P2P.Client.Storage;
+using P2P.Core;
 using P2P.Core.Protocol;
 
 namespace P2P.Client.Web;
@@ -29,7 +31,8 @@ public static class SystemApi
                 : control.State == ControlClientState.Established ? "running" : "degraded";
             return Api.Ok(new { phase, serverReachable = control.IsReady,
                 protocolVersion = ProtocolVersion.Current,
-                conflict = subnetConflicts?.Check(store.State.VirtualIp) });
+                conflict = subnetConflicts?.Check(store.State.VirtualIp),
+                version = AppVersion.Version, commit = AppVersion.Commit });
         });
 
         app.MapGet("/api/device", () => Api.Ok(new

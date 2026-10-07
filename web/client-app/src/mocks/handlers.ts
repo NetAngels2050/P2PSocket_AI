@@ -303,7 +303,7 @@ export function createHandlers(state: MockState = createDefaultState()) {
     // ── 2.1 系统 ──────────────────────────────────────────────
     http.get("*/api/system/state", () =>
       ok({ phase: state.phase, serverReachable: state.serverReachable, protocolVersion: 1,
-        conflict: state.conflict })),
+        conflict: state.conflict, version: "1.0.0", commit: "m401mock" })), // M4-01 关于区
     http.get("*/api/device", () =>
       ok({
         deviceId: state.deviceId,

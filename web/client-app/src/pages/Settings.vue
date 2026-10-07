@@ -15,8 +15,10 @@ import { ApiPaths, ApiError } from "@p2p/ui-shared";
 import type { StunTestView, PingDeviceView, ServerTestView, TunnelView, TunnelListView, RekeyResultView } from "@p2p/ui-shared";
 import { api } from "../api";
 import { useSettingsStore } from "../stores/settings";
+import { useSystemStore } from "../stores/system";
 
 const settings = useSettingsStore();
+const system = useSystemStore();
 
 const addrs = ref<string[]>([]);
 const punchConcurrency = ref(3);
@@ -78,6 +80,7 @@ onMounted(async () => {
   }
   void refreshPunchQueue(); // 诊断工具区初值（M3-14；失败静默，点刷新重试）
   void refreshTunnels();
+  void system.refresh(); // 关于区兜底拉取（M4-01；App 级 10s 轮询为主）
 });
 
 // ── 网络诊断（M3-15 stun-test，05 §7.2）────────────────────────────
@@ -330,6 +333,26 @@ async function triggerRekey(t: TunnelView) {
       </el-descriptions-item>
       <el-descriptions-item label="重连退避（秒）">
         {{ settings.settings.reconnect.minSec }} ~ {{ settings.settings.reconnect.maxSec }}
+      </el-descriptions-item>
+    </el-descriptions>
+
+    <!-- 关于（M4-01）：宿主版本与构建元数据（08 §1 注入；state 随 App 轮询，此处兜底拉一次） -->
+    <el-descriptions
+      v-if="system.state"
+      title="关于"
+      :column="3"
+      border
+      class="readonly"
+      data-testid="about-box"
+    >
+      <el-descriptions-item label="版本">
+        <span data-testid="about-version">v{{ system.state.version }}</span>
+      </el-descriptions-item>
+      <el-descriptions-item label="构建提交">
+        {{ system.state.commit }}
+      </el-descriptions-item>
+      <el-descriptions-item label="协议版本">
+        {{ system.state.protocolVersion }}
       </el-descriptions-item>
     </el-descriptions>
 

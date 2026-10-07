@@ -48,6 +48,7 @@ function emptyDashboard(): DashboardView {
     relay: { sessions: 0, bytesForwarded: 0, reaped: 0, startedAt: null, uptimeSec: 0 },
     stun: { admitted: 0, qps: 0, dropped: { rate: 0, auth: 0, circuit: 0 }, uptimeSec: 0 },
     punch: { total24h: 0, direct24h: 0, relay24h: 0, failed24h: 0, successRate24h: null, hourly: [] },
+    version: { version: "1.0.0", commit: "m401mock", buildDate: "2026-10-07T00:00:00Z" }, // M4-01 角标
   };
 }
 

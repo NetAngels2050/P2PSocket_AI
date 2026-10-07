@@ -225,6 +225,7 @@ internal static partial class TsGen // 生成逻辑集中（顶层语句宿主�
         typeof(RelaySessionsView),
         typeof(AuditLogView),
         typeof(AuditLogListView),
+        typeof(ServerVersionView),  // M4-01 仪表盘角标（dashboard.version，08 §1 注入）
     ];
 
     /// <summary>api-server.d.ts（M3-09 编制定案③：server-app 类型同源）。</summary>

@@ -1,5 +1,5 @@
 // 本文件由 export-ts 反射生成（06 §5、编制定案③），禁止手改。
-// 源：P2P.Server Web 展示 DTO（ServerViews，src/Tools/ExportTs @ 2026-10-02T08:27:26Z）。
+// 源：P2P.Server Web 展示 DTO（ServerViews，src/Tools/ExportTs @ 2026-10-07T15:32:32Z）。
 
 /** 服务端响应包裹（04 §3：code=0 成功；!=0 见错误码表 04 §5）。注意字段名 message（客户端为 msg）。 */
 export interface ServerApiEnvelope<T> {
@@ -20,6 +20,7 @@ export interface DashboardView {
   relay: RelaySnapshotView;
   stun: StunSnapshotView;
   punch: PunchStatsView;
+  version: ServerVersionView;
 }
 
 
@@ -251,6 +252,13 @@ export interface AuditLogListView {
   total: number;
   page: number;
   pageSize: number;
+}
+
+
+export interface ServerVersionView {
+  version: string;
+  commit: string;
+  buildDate: string;
 }
 
 

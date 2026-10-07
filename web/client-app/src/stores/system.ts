@@ -11,6 +11,8 @@ export interface SystemStateView {
   serverReachable: boolean;
   protocolVersion: number;
   conflict: SubnetConflictState | null; // M3-13：虚拟网段冲突（FR-C-204；null=无）
+  version: string; // M4-01：宿主版本（08 §1 注入，Settings 关于区）
+  commit: string;
 }
 
 export interface DeviceView {

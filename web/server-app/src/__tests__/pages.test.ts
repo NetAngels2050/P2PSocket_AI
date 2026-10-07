@@ -192,6 +192,18 @@ describe("仪表盘走查", () => {
     expect(chart.findAll("circle.dot").length).toBe(2);
   });
 
+  it("M4-01 宿主版本角标：version+commit（dashboard.version，08 §1 注入）", async () => {
+    const state = createDefaultServerState();
+    state.authed = true;
+    sessionStorage.setItem(AUTH_KEY, "1");
+    const { wrapper } = await mountPage(Dashboard, state, "/dashboard");
+
+    const badge = wrapper.find('[data-testid="server-version"]');
+    expect(badge.exists()).toBe(true);
+    expect(badge.text()).toContain("v1.0.0");
+    expect(badge.text()).toContain("m401mock");
+  });
+
   it("会话失效（401）：拦截器清标记并跳登录", async () => {
     const state = createDefaultServerState();
     state.authed = true;
