@@ -1,6 +1,6 @@
 # P2P 内网穿透产品 · 技术设计文档
 
-> 版本：v1.54　创建日期：2026-08-19　状态：待评审
+> 版本：v1.55　创建日期：2026-08-19　状态：待评审
 > 依据：[产品需求文档 PRD v0.6](../prd/README.md)（决策 D1~D21，D3 经 v0.4 修订；开放问题 OQ-1~OQ-19 已全部决议）
 > 定位：开发阶段的**施工图纸**——所有实现以本文档为准；与 PRD 冲突时以 PRD 为准并提出修订。
 
@@ -64,6 +64,7 @@
 | TD-21 | TcpNatSimulator 入站交付语义（M2-30 随实现定案）：**探测映射**=任意注册来源可入、多次可入、交付探测时的内部端点 listen（N=1 直连 STUN 端口前提，02 §5.2）；**出站映射**=APDF 精确身份过滤——入站连接在源侧新分配的外部端口须等于映射目的地端口（对称 rendezvous c_{N−2} 四元组交叉，一次桥接幂等去重）；miss（无映射/listen 未起）前 600ms 有界重试=模拟 SYN 重传；每客户端独占端口子段（打洞窗口互不重叠）。**命中代数**：命中 ⟺ \|ΔN\|≤1 或 min(N_A,N_B)=1；必 miss ⟺ \|ΔN\|≥2 且 min≥2。**miss 断言口径（M2-31 修正）**：协议统一双方 N（TD-13/20 服务端回填）→ N_A≠N_B 在真实路径不存在，不对称 miss 以**单测级注入**断言（M2-16）；场景级失配以 **NAT 时序扰动**等效——对端首次探测后、Fleet 连接前被 s 条外来流占用端口序列（模拟器 punchPerturbation 注入，探测型映射指向无人监听端口），s≥N−1 ⟺ 不对称必 miss 区 | TD-17、A-5；09 §2.2 |
 | TD-22 | 服务端管理面映射"实时状态"投影口径（M3 清单编制定案）：客户端状态机是映射运行态唯一真相源（M2-08 决议——运行态不落表），FR-S-823 服务端 /api/mappings 的状态列=**0x62 mapping_status 审计流水每映射最新一条**的投影（direct/relay/failed），无流水行（长期离线/从未上报）=unknown；不引入新的运行态落库或状态拉取协议 | FR-S-823；04 §3.2、05 §5 |
 | TD-23 | 中继限速执行语义（M3 清单编制定案，FR-S-703 收口）：relay_rate_limit=**全局字节速率令牌桶**作用于中继转发发送路径（UDP+TCP 双承载同桶；0=不限）；令牌耗尽时**新** 0x74 分配拒绝（5002，保护存量会话——存量仅降速不中断）；SignalingCoordinator relayAllowed 合成从"限速余量 M3 前恒真"（M2-07）收口为 `relay_enabled AND 余量足` | FR-S-703/824；04 §3.2、05 §6 |
+| TD-24 | 基准环境分级口径（M4 清单编制定案）：09 §3.1 吞吐基准环境"同机房两台 VPS"在当前项目资源下不可得（实际环境=一台公网 VPS+家宽 Windows）——基准报告落地为两级：**L1 本地自动化基准**（NatSimulator 打洞成功率矩阵/建立耗时分布/本机回环吞吐与延迟对照/资源占用采样——src/Tools/P2P.Bench 可重复运行，数据如实标注"本机回环基线≠真实网络性能"）+ **L2 实机基准**（公网 punch_stats 真实统计脱敏取数进报告；两台 VPS iperf3 吞吐=预留表格位，环境依赖待用户）；NFR-11"至少覆盖"按 L1+L2 真实打洞统计口径满足，报告注明环境规格与局限 | NFR-11/13/14；09 §3/§4 |
 
 ## 与 PRD 的追溯约定
 
@@ -129,3 +130,4 @@
 | 2026-10-02 | v1.52 | M3-17 落地同步（09 §2.3）：场景自动化与测试收口——A-12 in-proc 自动化（ScenarioIntegrationTests.M3_17_A12：服务端 Web[webBind 默认 127.0.0.1=仅本机]与"服务端机器"设备同进程同 loopback，管理员设备建映射 target=self:webPort 经隧道迂回——未认证 401{2001} 认证门不因路径放宽+admin/admin 首登[OQ-3]+仪表盘经映射可见双端在线；"公网扫描不可达"的绑定语义由既有 ServerWebHostTests.绑定地址为webBind_仅该地址可达 断言，实机归 M3-18）；09 §2.3 A-10/A-11/A-12 三行补"已自动化"标注与覆盖引用（A-10=M2-24 NicHealthMonitorTests 四用例+重启恢复全链、A-11=M2-25 卸载双路径）；核对记录：Core 覆盖率 80.7%（coverlet XPlat，cobertura 程序集级 line-rate，仅含 P2P.Core 源）≥70% 维持、跳过清单零无依据（SecretProtector=DPAPI Windows 07 §4、LinuxTun=root/TUN 设备、Wintun=驱动在位，均平台依赖）、heavy-runtime 集合成员评估（Scenario/ClientRuntime/InvalidationFlow/M3_15_StunTest 四类均拉双 Kestrel+真打洞链路/双运行时/真 StunService——串行合理保持，其余九类轻量并行无碍） |
 | 2026-10-02 | v1.53 | **M3-18 公网部署实弹抓出的 P0 启动序缺陷修复**：Host.StartAsync 首次解析 IHostedService 时即构造全部托管服务实例——ServerWebHostService（M3-06）ctor 尾参注入 StunService/RelayService 触发 DI 工厂读 server_config，早于 ServerHostService.StartAsync 步骤① 的 Initialize；存量 M2-36 库缺 M3-15 新键 stun_alt_addr 即在读点崩溃（全新库未建表同理——既有测试夹具全显式预初始化，掩盖该路径）。修复=Program 容器构建前先行 DbInitializer.Initialize（Migrate+幂等种子，置于 --reset-admin/--op 早退之后保「库已存在」语义；08 §7 升级方法同步注记）+ DbInitializerTests 存量库缺新增键补齐回归用例。实机证据：修复后 M2-36 库升级 M3 部署启动成功（清单 M3-18 修订行） |
 | 2026-10-03 | v1.54 | **Linux TUN 首次实机运行抓出 SIOCGIFINDEX 目标错误**（M3-18/A-12 服务端机客户端部署发现）：TUNSETIFF 后取 if_index 误把 SIOCGIFINDEX 发到 tun fd（字符设备，tun_chr_ioctl 未知命令返 EINVAL=errno 22，接口创建即失败）——该 ioctl 属 inet socket 层，须经 AF_INET UDP socket 发出（与 05 §1.3 自愈探测既有模式一致）；Windows 侧 Nic 测试平台依赖全跳过+A-10 Linux 轮未执行，路径首次实机运行才暴露。修复=QueryIfIndex 独立 helper（UDP socket + ownsHandle 句柄唯一收口 fd 生命周期），05 §1.3 补实现注记 |
+| 2026-10-07 | v1.55 | **M4 任务清单编制回流**（新增 TD-24，PRD 无回流——M4 范围 09 §1 既有）：基准环境分级——09 §3.1"同机房两台 VPS"不可得，落地 L1 本地自动化基准（src/Tools/P2P.Bench：NatSimulator 打洞成功率矩阵/建立耗时分布/回环吞吐与延迟对照/资源采样，报告标注回环基线局限）+L2 实机预留位（公网真实打洞统计脱敏取数+两台 VPS iperf3 预留位）；随清单定案：版本号 1.0.0（08 §1 版本注入统一值）；非目标收录 CI release 流水线/NativeAOT/代码签名（本地 package 脚本为交付形态） |
