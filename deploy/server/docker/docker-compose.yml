@@ -1,0 +1,27 @@
+# M4-04 服务端 compose 示例（NFR-34、08 §3.3）。
+# 用法：cd deploy/server/docker && docker compose up -d
+#   （首次须先构建镜像：仓库根 sh build/package.sh server 后
+#     docker build -f deploy/server/docker/Dockerfile -t p2p-server:1.0.0 out/server）
+# 升级：换镜像 tag 重建（数据在 ./data 卷不受影响）——见同目录 README.md。
+services:
+  p2p-server:
+    image: p2p-server:1.0.0
+    container_name: p2p-server
+    restart: unless-stopped
+    ports:
+      - "7000:7000"                    # 控制面 TCP（公网）
+      - "3478:3478/tcp"                # STUN TCP（公网；RFC5780 判型 M3-15）
+      - "3478:3478/udp"                # STUN UDP（公网）
+      - "7010-7020:7010-7020/tcp"      # 中继端口段 TCP（公网）
+      - "7010-7020:7010-7020/udp"      # 中继端口段 UDP（公网）
+      # D11（管理面不对公网监听）：容器内 webBind=0.0.0.0（Dockerfile ENV 覆盖），
+      # 宿主侧回环前缀映射=仅宿主本机可达；跨机管理走 SSH 隧道/客户端映射（过渡期口径同 M3-18）
+      - "127.0.0.1:7500:7500"
+    volumes:
+      - ./data:/data                   # 数据库+日志（p2p.db+server_config 业务键+logs/——镜像内 /app/logs 符号链接进卷）
+    # healthcheck 继承 Dockerfile（TCP 7000 bash /dev/tcp）；如需覆盖：
+    # healthcheck:
+    #   test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7000"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   retries: 3
