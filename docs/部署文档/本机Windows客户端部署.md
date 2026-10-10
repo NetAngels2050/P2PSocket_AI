@@ -1,5 +1,6 @@
 # 本机 Windows 客户端部署(M1-37 实机验收)
 
+> **本篇为 M1-37 实施实录，保留作验收记录**；最新部署口径（含 M4-02 Setup 安装包/静默参数/升级卸载）见 [docs/deploy/Windows客户端部署手册.md](../deploy/Windows客户端部署手册.md)（M4-07 随版交付）。
 > 部署时间:2026-09-11;对应任务 M1-37 客户端侧 A 机(依据 08 §3.1/§5.2、03 §5、A.0②)。
 > 部署方式:本机 `dotnet publish`(win-x64 自包含单文件)→ `D:\P2PClient` → Windows 服务 `P2PClient`。
 
