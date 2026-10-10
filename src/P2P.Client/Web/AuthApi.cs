@@ -46,8 +46,8 @@ public static class AuthApi
         {
             try
             {
-                var ack = await control.SendRequestAsync<UserLogoutAck>(new UserLogout(
-                    control.NextSeq(), control.TimestampMs(), MsgType.UserLogout), ct);
+                var ack = await control.SendRequestAsync<UserLogoutAck>(seq => new UserLogout(
+                    seq, control.TimestampMs(), MsgType.UserLogout), ct);
                 if (!ack.Ok) throw new ApiException(ErrorCode.BadRequest, "登出失败");
                 ctx.LoginUser = null;
                 return Api.Ok(null);
@@ -72,8 +72,8 @@ public static class AuthApi
                     throw new ApiException(ErrorCode.BadRequest, "旧密码不能为空");
                 if (newPassword.Length < 6)
                     throw new ApiException(ErrorCode.BadRequest, "新密码至少 6 字符");
-                var ack = await control.SendRequestAsync<UserChangePasswordAck>(new UserChangePassword(
-                    control.NextSeq(), control.TimestampMs(), MsgType.UserChangePassword,
+                var ack = await control.SendRequestAsync<UserChangePasswordAck>(seq => new UserChangePassword(
+                    seq, control.TimestampMs(), MsgType.UserChangePassword,
                     oldPassword, newPassword), ct);
                 if (!ack.Ok)
                     throw new ApiException(ErrorCode.Unauthorized, "旧密码错误或修改被拒绝");

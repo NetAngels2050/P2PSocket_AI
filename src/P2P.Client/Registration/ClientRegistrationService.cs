@@ -96,8 +96,8 @@ public sealed class ClientRegistrationService(
 
         // 未注册设备首个 Register 不签名（02 §2.2）；staticPubKey 承载 deviceSecret 的 ECIES 下发（OQ-15）
         using var keyPair = EcKeyPair.Generate();
-        var ack = await client.SendRequestAsync<RegisterAck>(new Register(
-            client.NextSeq(), client.TimestampMs(), MsgType.Register,
+        var ack = await client.SendRequestAsync<RegisterAck>(seq => new Register(
+            seq, client.TimestampMs(), MsgType.Register,
             macCode, deviceName ?? _options.Hostname, _options.Os, _options.ClientVersion,
             keyPair.ExportPublicKey(), null, null, null));
         var deviceSecret = Ecies.Decrypt(keyPair, ack.DeviceSecretBox);
@@ -123,18 +123,18 @@ public sealed class ClientRegistrationService(
 
     /// <summary>向导第二步·已有账号登录绑定（0x21）：设备 owner 绑定持久在库（A-2 双设备同账号前提）。</summary>
     public Task<UserLoginAck> LoginBindAsync(string username, string password, CancellationToken ct = default)
-        => client.SendRequestAsync<UserLoginAck>(new UserLogin(
-            client.NextSeq(), client.TimestampMs(), MsgType.UserLogin, username, password), ct);
+        => client.SendRequestAsync<UserLoginAck>(seq => new UserLogin(
+            seq, client.TimestampMs(), MsgType.UserLogin, username, password), ct);
 
     /// <summary>向导第二步·新建账号（0x20）：成功后仍需 <see cref="LoginBindAsync"/> 登录。</summary>
     public Task<UserRegisterAck> CreateUserAsync(string username, string password, CancellationToken ct = default)
-        => client.SendRequestAsync<UserRegisterAck>(new UserRegister(
-            client.NextSeq(), client.TimestampMs(), MsgType.UserRegister, username, password), ct);
+        => client.SendRequestAsync<UserRegisterAck>(seq => new UserRegister(
+            seq, client.TimestampMs(), MsgType.UserRegister, username, password), ct);
 
     /// <summary>登录后新建分组（0x50，向导"注册账号建组"路径收尾）。</summary>
     public Task<GroupCreateAck> CreateGroupAsync(string name, JoinPolicy policy, CancellationToken ct = default)
-        => client.SendRequestAsync<GroupCreateAck>(new GroupCreate(
-            client.NextSeq(), client.TimestampMs(), MsgType.GroupCreate, name, policy), ct);
+        => client.SendRequestAsync<GroupCreateAck>(seq => new GroupCreate(
+            seq, client.TimestampMs(), MsgType.GroupCreate, name, policy), ct);
 
     private static (string Host, int Port) ParseHostPort(string addr)
     {

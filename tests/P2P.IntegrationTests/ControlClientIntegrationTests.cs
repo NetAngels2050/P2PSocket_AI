@@ -233,4 +233,72 @@ public sealed class ControlClientIntegrationTests : IAsyncLifetime
         await Assert.ThrowsAsync<PassiveModeException>(() => client.SendRequestAsync<DeviceListResponse>(
             new DeviceListRequest(client.NextSeq(), client.TimestampMs(), MsgType.DeviceList, 0, 20)));
     }
+
+    [Fact]
+    public async Task 并发工厂发送与心跳_seq保持递增不断连()
+    {
+        // M4-05 基准（8 映射并发）暴露的 P0 回归防护：消息 seq 在调用方构造时刻固化、写线在
+        // 发送门内——多线程并发（打洞成功后 0x72/0x76/0x64 与心跳交错）分配序≠写线序 →
+        // 服务端 seq_regression 断连（02 §2.4）。工厂重载把组包收进门内（分配序≡写线序）；
+        // 本用例 100ms 心跳 + 8 线程单向风暴 + 并发请求，全程无断连且末次请求往返成功。
+        var (deviceId, secret) = await SeedDeviceAsync();
+        await using var client = new ControlClient(
+            new[] { $"127.0.0.1:{_port}" },
+            new ControlClientOptions { HeartbeatInterval = TimeSpan.FromMilliseconds(100) },
+            deviceId: deviceId,
+            deviceSecret: secret);
+        await ReadyAsync(client);
+
+        var unknownId = Guid.NewGuid(); // StatsService 对非本人映射静默跳过（M2-08）——纯发送面压力
+        var flood = Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
+        {
+            for (var i = 0; i < 50; i++)
+                await client.SendAsync(seq => new StatsReport(
+                    seq, client.TimestampMs(), MsgType.StatsReport,
+                    [new StatsEntry(unknownId, 1, 1, 1)]));
+        }));
+        var requests = Enumerable.Range(0, 5).Select(_ => client.SendRequestAsync<DeviceListResponse>(
+            seq => new DeviceListRequest(seq, client.TimestampMs(), MsgType.DeviceList, 0, 20)));
+        await Task.WhenAll(flood.Concat(requests)); // 断连会让 pending 以"连接已断开"失败 → 此处即抛
+
+        Assert.Equal(ControlClientState.Established, client.State); // 无 seq_regression 断连
+        var ack = await client.SendRequestAsync<DeviceUpdateAck>(seq => new DeviceUpdate(
+            seq, client.TimestampMs(), MsgType.DeviceUpdate, "after-storm"));
+        Assert.True(ack.Ok); // 风暴后连接仍可用
+    }
+
+    [Fact]
+    public async Task 服务端并发推送_入队重盖seq_客户端不断连()
+    {
+        // 对称方向回归（M4-05 P0 服务端面）：session.SendAsync 入 Channel FIFO 串行，但调用方
+        // 构造时刻分配的 seq 与入队序在多线程推送（读循环 Ack 与信令/列表推送并发）下交错 →
+        // 客户端按 seq 回退断连。修复=入队前重盖（分配与入队同点）；本用例多线程并发 PushAsync
+        // 0x41，客户端全量收到且连接存活。
+        var (deviceId, secret) = await SeedDeviceAsync();
+        await using var client = NewClient(deviceId, secret);
+        var received = 0;
+        client.ServerPush += _ => Interlocked.Increment(ref received);
+        await ReadyAsync(client);
+
+        var session = _registry.TryGet(deviceId);
+        Assert.NotNull(session);
+
+        var pushes = Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
+        {
+            for (var i = 0; i < 50; i++)
+                await session.PushAsync(new DeviceListUpdate(session.NextSeq(),
+                    session.ServerTimestamp(), MsgType.DeviceListUpdate));
+        }));
+        await Task.WhenAll(pushes);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (Volatile.Read(ref received) < 400 && !cts.IsCancellationRequested)
+            await Task.Delay(20, cts.Token);
+        Assert.Equal(400, Volatile.Read(ref received)); // 全量送达（断连=读循环退出即凑不齐）
+
+        Assert.Equal(ControlClientState.Established, client.State); // 客户端 seq 校验未触发断连
+        var ack = await client.SendRequestAsync<DeviceUpdateAck>(seq => new DeviceUpdate(
+            seq, client.TimestampMs(), MsgType.DeviceUpdate, "after-push-storm"));
+        Assert.True(ack.Ok);
+    }
 }

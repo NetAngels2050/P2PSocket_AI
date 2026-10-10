@@ -34,8 +34,8 @@ public sealed class ControlSession : IAsyncDisposable
     private readonly Func<ControlSession, IPcpMessage, Task> _dispatcher; // 业务路由（M1-14+ 注册）
     private readonly Action? _onHmacFailure; // 断连计数（M1-13 完成判定）
 
-    private readonly Channel<(byte[] Body, TaskCompletionSource Tcs)> _sendQueue =
-        Channel.CreateBounded<(byte[], TaskCompletionSource)>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.Wait });
+    private readonly Channel<(IPcpMessage Message, TaskCompletionSource Tcs, bool Sign)> _sendQueue =
+        Channel.CreateBounded<(IPcpMessage, TaskCompletionSource, bool)>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.Wait });
 
     private SessionState _state = SessionState.AwaitingHello;
     private bool _versionRejected;   // 版本协商失败：0x03 受理窗口（02 §7，M2-14）
@@ -361,11 +361,13 @@ public sealed class ControlSession : IAsyncDisposable
 
     public async Task SendAsync<T>(T message, CancellationToken ct = default) where T : class, IPcpMessage
     {
-        var body = _hmacEnabled
-            ? PcpCodec.EncodeSigned(message, _connMacKey)
-            : PcpCodec.Encode(message);
+        // 消息（未编码）入队，seq 分配/编码/写线全部在单线程排空循环内完成——多线程并发发送
+        //（读循环 Ack 与信令/列表推送）下入队序即写线序，客户端按 seq 严格递增校验不再误断连
+        //（02 §2.4；M4-05 基准 8 映射并发暴露的对称缺陷）。签名标志取入队时刻（ProofAck/
+        // RegisterAck 置位先于其入队，且协议时序保证其后消息只能更晚入队——排空线程写线时
+        // 标志可能已翻转，按写线时刻编码会令早入队消息以对端未就绪的密钥签名）。
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await _sendQueue.Writer.WriteAsync((body, tcs), ct).ConfigureAwait(false);
+        await _sendQueue.Writer.WriteAsync((message, tcs, _hmacEnabled), ct).ConfigureAwait(false);
         await tcs.Task.ConfigureAwait(false);
     }
 
@@ -377,8 +379,13 @@ public sealed class ControlSession : IAsyncDisposable
     {
         try
         {
-            await foreach (var (body, tcs) in _sendQueue.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+            await foreach (var (message, tcs, sign) in _sendQueue.Reader.ReadAllAsync(ct).ConfigureAwait(false))
             {
+                // 排空线程内重盖（分配序≡写线序）+ 编码（编码也移出调用方线程）
+                var sequenced = MessageRebuilder.WithHeader(message, NextSeq(), NowMs64);
+                var body = sign
+                    ? PcpCodec.EncodeSignedObject(sequenced, _connMacKey)
+                    : PcpCodec.EncodeObject(sequenced);
                 await FrameCodec.WriteFrameAsync(_writer, body, ct).ConfigureAwait(false);
                 tcs.TrySetResult();
             }

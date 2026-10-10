@@ -30,8 +30,8 @@ public static class RelayClient
     /// 服务端错误（5002/1001/4005）以 ControlErrorException 抛出（族类型配对 0x74）。</summary>
     public static async Task<RelayGrant> AllocateAsync(ControlClient control, Guid punchSessionId,
         CancellationToken ct = default)
-        => await control.SendRequestAsync<RelayGrant>(new RelayAllocate(
-            control.NextSeq(), control.TimestampMs(), MsgType.RelayAllocate, punchSessionId), ct).ConfigureAwait(false);
+        => await control.SendRequestAsync<RelayGrant>(seq => new RelayAllocate(
+            seq, control.TimestampMs(), MsgType.RelayAllocate, punchSessionId), ct).ConfigureAwait(false);
 
     /// <summary>向 relay 端点 RELAY_JOIN（按承载选择 Grant 端点）→ 确认后返回就绪数据面通道。</summary>
     public static async Task<RelayTransport> JoinAsync(RelayGrant grant, RelayCarrier carrier,

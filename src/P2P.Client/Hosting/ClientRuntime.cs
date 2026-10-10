@@ -310,12 +310,12 @@ public sealed class ClientRuntime : IAsyncDisposable
         _puncher.Attach(new Puncher(
             // OQ-19/TD-20 punchConcurrency 通路（M2-16 打通）：settings → 0x70 上送（发送时点取当前值，
             // 设置页修改对后续打洞会话生效）；服务端 PunchPolicy.Normalize 校验后经 0x71/0x70 Ack 回填
-            (targetId, trigger, proto, endpoints, ct) => _control.SendRequestAsync<PunchRequestAck>(new PunchRequest(
-                _control.NextSeq(), _control.TimestampMs(), MsgType.PunchRequest,
+            (targetId, trigger, proto, endpoints, ct) => _control.SendRequestAsync<PunchRequestAck>(seq => new PunchRequest(
+                seq, _control.TimestampMs(), MsgType.PunchRequest,
                 targetId, trigger, proto, endpoints,
                 PunchConcurrency: (byte?)_settings.Settings.PunchConcurrency), ct),
-            (sessionId, endpoints, ct) => _control.SendAsync(new PunchEndpoint(
-                _control.NextSeq(), _control.TimestampMs(), MsgType.PunchEndpoint,
+            (sessionId, endpoints, ct) => _control.SendAsync(seq => new PunchEndpoint(
+                seq, _control.TimestampMs(), MsgType.PunchEndpoint,
                 sessionId, endpoints), ct),
             (socket, ct) => stunEp is null
                 ? throw new IOException("STUN 地址解析失败（服务端主机名不可解析，TD-07 :3478）")
@@ -531,8 +531,8 @@ public sealed class ClientRuntime : IAsyncDisposable
                         ?.Config.Proto ?? "udp";
                     try
                     {
-                        await _control.SendRequestAsync<PunchRetry>(new PunchRetry(
-                            _control.NextSeq(), _control.TimestampMs(), MsgType.PunchRetry,
+                        await _control.SendRequestAsync<PunchRetry>(seq => new PunchRetry(
+                            seq, _control.TimestampMs(), MsgType.PunchRetry,
                             session.SessionId), ct);
                     }
                     catch (ControlErrorException e)
@@ -558,8 +558,8 @@ public sealed class ClientRuntime : IAsyncDisposable
         uint offset = 0;
         while (true)
         {
-            var resp = await _control.SendRequestAsync<DeviceListResponse>(new DeviceListRequest(
-                _control.NextSeq(), _control.TimestampMs(), MsgType.DeviceList, offset, 100), ct);
+            var resp = await _control.SendRequestAsync<DeviceListResponse>(seq => new DeviceListRequest(
+                seq, _control.TimestampMs(), MsgType.DeviceList, offset, 100), ct);
             items.AddRange(resp.Items);
             if (!resp.HasMore) break;
             offset += (uint)resp.Items.Length;

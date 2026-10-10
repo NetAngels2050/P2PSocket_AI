@@ -54,8 +54,9 @@ public sealed class ClientReporter : IAsyncDisposable
     private void OnPunchCompleted(PunchOutcome outcome)
     {
         if (outcome.SessionId == Guid.Empty) return; // Ack 前失败：无服务端会话可归属（M2-08 台账口径）
-        _ = SendQuietlyAsync(new PunchResult(
-            _control.NextSeq(), _control.TimestampMs(), MsgType.PunchResult,
+        // 工厂组包（M4-05 P0）：0x72 与 0x62/0x64/心跳并发，seq 须在发送门内分配
+        _ = SendQuietlyAsync(seq => new PunchResult(
+            seq, _control.TimestampMs(), MsgType.PunchResult,
             outcome.SessionId, outcome.Ok,
             EndpointFor(outcome.Ok, outcome.Session?.ViaRelay == true, outcome.PeerEndpoint),
             outcome.FailReason));
@@ -73,8 +74,8 @@ public sealed class ClientReporter : IAsyncDisposable
     private void OnStateChanged(MappingStateEvent e)
     {
         if (StatusStringFor(e.State) is not { } state) return; // punching/disabled/invalid 不入流水
-        _ = SendQuietlyAsync(new MappingStatus(
-            _control.NextSeq(), _control.TimestampMs(), MsgType.MappingStatus,
+        _ = SendQuietlyAsync(seq => new MappingStatus(
+            seq, _control.TimestampMs(), MsgType.MappingStatus,
             e.MappingId, state, e.Detail));
     }
 
@@ -109,18 +110,18 @@ public sealed class ClientReporter : IAsyncDisposable
                 (ulong)t.RelayBytes))
             .ToArray();
         if (entries.Length == 0) return Task.CompletedTask;
-        return SendQuietlyAsync(new StatsReport(
-            _control.NextSeq(), _control.TimestampMs(), MsgType.StatsReport, entries), ct);
+        return SendQuietlyAsync(seq => new StatsReport(
+            seq, _control.TimestampMs(), MsgType.StatsReport, entries), ct);
     }
 
     // ── 出站与生命周期 ───────────────────────────────────────────────
 
-    private async Task SendQuietlyAsync(IPcpMessage message, CancellationToken ct = default)
+    private async Task SendQuietlyAsync(Func<uint, IPcpMessage> factory, CancellationToken ct = default)
     {
-        try { await _control.SendAsync(message, ct); }
+        try { await _control.SendAsync(factory, ct); }
         catch (Exception e)
         {
-            Log?.Invoke($"上报 0x{message.MsgType:X2} 失败：{e.Message}（0x64 下周期重试；事件快照待下次迁移）");
+            Log?.Invoke($"上报 0x{factory(0).MsgType:X2} 失败：{e.Message}（0x64 下周期重试；事件快照待下次迁移）");
         }
     }
 

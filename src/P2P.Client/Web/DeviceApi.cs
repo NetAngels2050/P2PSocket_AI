@@ -28,8 +28,8 @@ public static class DeviceApi
                 uint offset = 0;
                 while (true)
                 {
-                    var resp = await control.SendRequestAsync<DeviceListResponse>(new DeviceListRequest(
-                        control.NextSeq(), control.TimestampMs(), MsgType.DeviceList, offset, PageSize), ct);
+                    var resp = await control.SendRequestAsync<DeviceListResponse>(seq => new DeviceListRequest(
+                        seq, control.TimestampMs(), MsgType.DeviceList, offset, PageSize), ct);
                     items.AddRange(resp.Items);
                     if (!resp.HasMore) break;
                     offset += (uint)resp.Items.Length;
@@ -53,8 +53,8 @@ public static class DeviceApi
         {
             try
             {
-                var ack = await control.SendRequestAsync<RemoteCodeResetAck>(new RemoteCodeReset(
-                    control.NextSeq(), control.TimestampMs(), MsgType.RemoteCodeReset), ct);
+                var ack = await control.SendRequestAsync<RemoteCodeResetAck>(seq => new RemoteCodeReset(
+                    seq, control.TimestampMs(), MsgType.RemoteCodeReset), ct);
                 if (!ack.Ok || string.IsNullOrEmpty(ack.NewRemoteCode))
                     throw new ApiException(ErrorCode.BadRequest, "远程码重置被服务端拒绝");
                 state.State.RemoteCode = ack.NewRemoteCode; // 新码持久化（03 §5 state.json）

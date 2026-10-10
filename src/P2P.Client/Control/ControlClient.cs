@@ -134,31 +134,54 @@ public sealed class ControlClient : IAsyncDisposable
     // ── 请求发送 ─────────────────────────────────────────────────────
 
     /// <summary>发送请求并等待 Ack（族类型配对：请求与 Ack 共用 msgType，Register 族 0x10→0x11 例外）。
-    /// 5005 TIME_SKEW 自动重校准并换新 seq/ts 重试一次（02 §2.3）。</summary>
-    public async Task<TAck> SendRequestAsync<TAck>(IPcpMessage request, CancellationToken ct = default)
+    /// 5005 TIME_SKEW 自动重校准并换新 seq/ts 重试一次（02 §2.3）。
+    /// 工厂重载为唯一并发安全路径：消息在发送门内组包（seq 分配序≡字节写入序，02 §2.4 严格递增）。</summary>
+    public async Task<TAck> SendRequestAsync<TAck>(Func<uint, IPcpMessage> factory, CancellationToken ct = default)
         where TAck : class, IPcpMessage
     {
-        ArgumentNullException.ThrowIfNull(request);
-        ThrowIfPassiveBlocked(request.MsgType);
+        ArgumentNullException.ThrowIfNull(factory);
         if (!IsReady)
-            throw new ControlClientException($"控制连接未就绪（{State}），无法发送 0x{request.MsgType:X2}");
+            throw new ControlClientException($"控制连接未就绪（{State}），无法发送请求");
 
         await _requestGate.WaitAsync(ct);
         try
         {
-            var pending = new PendingAck(request);
-            _pending = pending;
+            PendingAck pending;
+            // 门内原子：seq 分配→组包→pending 注册→写线（pending 先于写线=Ack 到达不丢；
+            // seq 分配与写入同临界区=多线程发送不再乱序 → 服务端 seq_regression 断连根治）
+            await _sendGate.WaitAsync(ct);
             try
             {
-                await SendWireAsync(EncodeOutbound(request), ct);
-                return await AwaitAckAsync<TAck>(pending, ct);
+                var request = factory(NextSeq());
+                ThrowIfPassiveBlocked(request.MsgType);
+                pending = new PendingAck(request);
+                _pending = pending;
+                var writer = _writer ?? throw new ControlClientException("连接未建立");
+                await FrameCodec.WriteFrameAsync(writer, EncodeOutbound(request), ct);
             }
+            finally { _sendGate.Release(); }
+            try { return await AwaitAckAsync<TAck>(pending, ct); }
             finally { _pending = null; }
         }
         finally { _requestGate.Release(); }
     }
 
-    /// <summary>单向发送（0x76 PunchEndpoint 等无 Ack 上报，M1-26）。</summary>
+    /// <summary>已组包消息直发（单线程/测试场景保留：seq 已在消息内固化——调用方自行保证与
+    /// 其他发送线程的顺序；多线程并发发送须用工厂重载）。</summary>
+    public Task<TAck> SendRequestAsync<TAck>(IPcpMessage request, CancellationToken ct = default)
+        where TAck : class, IPcpMessage
+        => SendRequestAsync<TAck>(_ => request, ct);
+
+    /// <summary>单向发送（0x76 PunchEndpoint 等无 Ack 上报，M1-26）：门内原子组包（并发安全路径）。</summary>
+    public async Task SendAsync(Func<uint, IPcpMessage> factory, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        if (!IsReady)
+            throw new ControlClientException($"控制连接未就绪（{State}），无法发送消息");
+        await SendWithSeqAsync(factory, ct);
+    }
+
+    /// <summary>已组包消息单向直发（单线程/测试场景保留；多线程并发须用工厂重载）。</summary>
     public async Task SendAsync(IPcpMessage message, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
@@ -544,8 +567,9 @@ public sealed class ControlClient : IAsyncDisposable
     {
         try
         {
-            var retry = MessageRebuilder.WithHeader(pending.Request, NextSeq(), TimestampMs());
-            await SendWireAsync(EncodeOutbound(retry), _cts.Token);
+            // 门内原子重发：重试也与心跳/新请求并发，seq 换新须与写线同临界区
+            await SendWithSeqAsync(
+                seq => MessageRebuilder.WithHeader(pending.Request, seq, TimestampMs()), _cts.Token);
         }
         catch (Exception e)
         {
@@ -565,8 +589,13 @@ public sealed class ControlClient : IAsyncDisposable
         while (await timer.WaitForNextTickAsync(ct))
         {
             Volatile.Write(ref _lastHeartbeatSentAt, LocalNowMs);
-            try { await SendWireAsync(PcpCodec.EncodeSigned(
-                new Heartbeat(NextSeq(), TimestampMs(), MsgType.Heartbeat), _connMacKey), ct); }
+            try
+            {
+                // 门内原子（此前组包在门外：心跳与请求并发时 seq 分配序≠写线序 → 服务端
+                // seq_regression 断连——M4-05 基准 8 映射并发场景稳定复现的根因）
+                await SendWithSeqAsync(
+                    seq => new Heartbeat(seq, TimestampMs(), MsgType.Heartbeat), ct);
+            }
             catch (Exception e) when (e is not OperationCanceledException)
             {
                 Log?.Invoke($"心跳发送失败：{e.Message}");
@@ -576,6 +605,23 @@ public sealed class ControlClient : IAsyncDisposable
     }
 
     // ── 出站（单写者门卫：心跳/请求/重试并发）─────────────────────────
+
+    /// <summary>门内原子原语：seq 分配→组包→passive 校验→编码→写线。
+    /// seq 分配序≡字节写入序（02 §2.4 严格递增）——此前消息在调用线程组包（seq 构造时刻固化）、
+    /// 写线在门内，多线程并发时分配序≠写线序 → 服务端 seq_regression 断连（M4-05 基准暴露）。
+    /// 无就绪检查（调用方自备）；passive 在门内对已组包消息校验（心跳 0x30 非主动类恒通过）。</summary>
+    private async Task SendWithSeqAsync(Func<uint, IPcpMessage> factory, CancellationToken ct)
+    {
+        await _sendGate.WaitAsync(ct);
+        try
+        {
+            var message = factory(NextSeq());
+            ThrowIfPassiveBlocked(message.MsgType);
+            var writer = _writer ?? throw new ControlClientException("连接未建立");
+            await FrameCodec.WriteFrameAsync(writer, EncodeOutbound(message), ct);
+        }
+        finally { _sendGate.Release(); }
+    }
 
     private byte[] EncodeOutbound(IPcpMessage message)
         => _hmacEnabled ? PcpCodec.EncodeSignedObject(message, _connMacKey) : PcpCodec.EncodeObject(message);
@@ -697,31 +743,5 @@ public sealed class ControlClient : IAsyncDisposable
 
         public void TryComplete(IPcpMessage message) => _tcs.TrySetResult(message);
         public void TryFail(Exception error) => _tcs.TrySetException(error);
-    }
-}
-
-/// <summary>
-/// 5005 重试的消息重建：全部 PCP 消息为 positional record（Key(0)=Seq、Key(1)=TimestampMs），
-/// 经主构造函数按参数名回填（Seq/TimestampMs 换新值，其余取现值）。低频路径，反射开销可忽略。
-/// </summary>
-internal static class MessageRebuilder
-{
-    public static IPcpMessage WithHeader(IPcpMessage message, uint seq, ulong timestampMs)
-    {
-        var type = message.GetType();
-        var ctor = type.GetConstructors().Single();
-        var parameters = ctor.GetParameters();
-        var args = new object?[parameters.Length];
-        for (var i = 0; i < parameters.Length; i++)
-        {
-            var name = parameters[i].Name;
-            args[i] = name switch
-            {
-                "Seq" => seq,
-                "TimestampMs" => timestampMs,
-                _ => type.GetProperty(name!)?.GetValue(message),
-            };
-        }
-        return (IPcpMessage)ctor.Invoke(args);
     }
 }

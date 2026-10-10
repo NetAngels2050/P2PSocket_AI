@@ -39,8 +39,8 @@ public static class LanSegmentsApi
                 var normalized = NormalizeCidr(cidr)
                     ?? throw new ApiException(ErrorCode.BadRequest, "cidr 须为合法网段（如 192.168.1.0/24）");
                 cidr = normalized;
-                var ack = await control.SendRequestAsync<LanSegmentsUpsertAck>(new LanSegmentsUpsert(
-                    control.NextSeq(), control.TimestampMs(), MsgType.LanSegmentsUpsert,
+                var ack = await control.SendRequestAsync<LanSegmentsUpsertAck>(seq => new LanSegmentsUpsert(
+                    seq, control.TimestampMs(), MsgType.LanSegmentsUpsert,
                     SegmentId: null, Cidr: cidr, Enabled: true), ct);
                 var next = store.Entries().Where(e => e.Cidr != cidr).ToList(); // 同段覆盖
                 next.Add(new LanSegmentsStore.LanSegmentEntry(ack.SegmentId, cidr, true));
@@ -58,8 +58,8 @@ public static class LanSegmentsApi
             {
                 if (store.Entries().FirstOrDefault(e => e.SegmentId == id) is { } entry)
                 {
-                    await control.SendRequestAsync<LanSegmentsUpsertAck>(new LanSegmentsUpsert(
-                        control.NextSeq(), control.TimestampMs(), MsgType.LanSegmentsUpsert,
+                    await control.SendRequestAsync<LanSegmentsUpsertAck>(seq => new LanSegmentsUpsert(
+                        seq, control.TimestampMs(), MsgType.LanSegmentsUpsert,
                         id, entry.Cidr, Enabled: false), ct);
                     await store.ReplaceAllAsync(
                         store.Entries().Where(e => e.SegmentId != id).ToList(), ct);

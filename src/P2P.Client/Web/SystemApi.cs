@@ -51,8 +51,8 @@ public static class SystemApi
                 var name = body.DeviceName?.Trim() ?? "";
                 if (name.Length is < 1 or > 64)
                     throw new ApiException(ErrorCode.BadRequest, "设备名长度须为 1~64 字符");
-                var ack = await control.SendRequestAsync<DeviceUpdateAck>(new DeviceUpdate(
-                    control.NextSeq(), control.TimestampMs(), MsgType.DeviceUpdate, name), ct);
+                var ack = await control.SendRequestAsync<DeviceUpdateAck>(seq => new DeviceUpdate(
+                    seq, control.TimestampMs(), MsgType.DeviceUpdate, name), ct);
                 if (!ack.Ok) throw new ApiException(ErrorCode.BadRequest, "服务端拒绝改名");
                 return Api.Ok(new { deviceName = name });
             }

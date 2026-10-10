@@ -20,8 +20,8 @@ public static class GroupsApi
         {
             try
             {
-                var resp = await control.SendRequestAsync<GroupListResponse>(new GroupListRequest(
-                    control.NextSeq(), control.TimestampMs(), MsgType.GroupList), ct);
+                var resp = await control.SendRequestAsync<GroupListResponse>(seq => new GroupListRequest(
+                    seq, control.TimestampMs(), MsgType.GroupList), ct);
                 var items = resp.Items
                     .Select(g => new GroupView(g.GroupId, g.GroupName, PolicyString(g.Policy),
                         g.IsOwner, g.MemberCount)).ToList();
@@ -29,8 +29,8 @@ public static class GroupsApi
                 var requests = new List<GroupRequestView>();
                 foreach (var owned in resp.Items.Where(g => g.IsOwner))
                 {
-                    var list = await control.SendRequestAsync<JoinRequestsResponse>(new JoinRequests(
-                        control.NextSeq(), control.TimestampMs(), MsgType.JoinRequests,
+                    var list = await control.SendRequestAsync<JoinRequestsResponse>(seq => new JoinRequests(
+                        seq, control.TimestampMs(), MsgType.JoinRequests,
                         JoinRequestAction.List, owned.GroupId, null), ct);
                     requests.AddRange(list.Items.Select(r =>
                         new GroupRequestView(r.RequestId, r.GroupId, r.DeviceId, r.DeviceName, r.CreatedAtMs)));
@@ -46,8 +46,8 @@ public static class GroupsApi
             try
             {
                 var (name, policy) = ValidateCreate(body);
-                var ack = await control.SendRequestAsync<GroupCreateAck>(new GroupCreate(
-                    control.NextSeq(), control.TimestampMs(), MsgType.GroupCreate, name, policy), ct);
+                var ack = await control.SendRequestAsync<GroupCreateAck>(seq => new GroupCreate(
+                    seq, control.TimestampMs(), MsgType.GroupCreate, name, policy), ct);
                 if (ack.GroupId == Guid.Empty)
                     throw new ApiException(ErrorCode.BadRequest, "分组创建被拒绝（名称不可用或未登录）");
                 hub.Publish(new { ev = WsEventNames.DeviceList });
@@ -65,8 +65,8 @@ public static class GroupsApi
                 var code = body.InviteCode?.Trim() ?? "";
                 if (code.Length == 0)
                     throw new ApiException(ErrorCode.BadRequest, "邀请码不能为空");
-                var ack = await control.SendRequestAsync<GroupJoinAck>(new GroupJoin(
-                    control.NextSeq(), control.TimestampMs(), MsgType.GroupJoin, code), ct);
+                var ack = await control.SendRequestAsync<GroupJoinAck>(seq => new GroupJoin(
+                    seq, control.TimestampMs(), MsgType.GroupJoin, code), ct);
                 hub.Publish(new { ev = WsEventNames.DeviceList });
                 return Api.Ok(new { groupId = ack.GroupId });
             }
@@ -78,8 +78,8 @@ public static class GroupsApi
         {
             try
             {
-                var ack = await control.SendRequestAsync<GroupLeaveAck>(new GroupLeave(
-                    control.NextSeq(), control.TimestampMs(), MsgType.GroupLeave, id), ct);
+                var ack = await control.SendRequestAsync<GroupLeaveAck>(seq => new GroupLeave(
+                    seq, control.TimestampMs(), MsgType.GroupLeave, id), ct);
                 if (!ack.Ok)
                     throw new ApiException(ErrorCode.BadRequest, "退出分组失败（未登录或不在组内）");
                 hub.Publish(new { ev = WsEventNames.DeviceList });
@@ -103,8 +103,8 @@ public static class GroupsApi
                 };
                 if (name is null && policy is null)
                     throw new ApiException(ErrorCode.BadRequest, "未提供任何修改项（name/joinPolicy）");
-                var ack = await control.SendRequestAsync<GroupUpdateAck>(new GroupUpdate(
-                    control.NextSeq(), control.TimestampMs(), MsgType.GroupUpdate, id, name, policy), ct);
+                var ack = await control.SendRequestAsync<GroupUpdateAck>(seq => new GroupUpdate(
+                    seq, control.TimestampMs(), MsgType.GroupUpdate, id, name, policy), ct);
                 if (!ack.Ok)
                     throw new ApiException(ErrorCode.BadRequest, "编辑分组失败（未登录或非所有者）");
                 hub.Publish(new { ev = WsEventNames.DeviceList });
@@ -118,8 +118,8 @@ public static class GroupsApi
         {
             try
             {
-                var ack = await control.SendRequestAsync<GroupDissolveAck>(new GroupDissolve(
-                    control.NextSeq(), control.TimestampMs(), MsgType.GroupDissolve, id), ct);
+                var ack = await control.SendRequestAsync<GroupDissolveAck>(seq => new GroupDissolve(
+                    seq, control.TimestampMs(), MsgType.GroupDissolve, id), ct);
                 if (!ack.Ok)
                     throw new ApiException(ErrorCode.BadRequest, "解散分组失败（未登录或非所有者）");
                 hub.Publish(new { ev = WsEventNames.DeviceList });
@@ -134,8 +134,8 @@ public static class GroupsApi
         {
             try
             {
-                var ack = await control.SendRequestAsync<GroupRemoveMemberAck>(new GroupRemoveMember(
-                    control.NextSeq(), control.TimestampMs(), MsgType.GroupRemoveMember, id, deviceId), ct);
+                var ack = await control.SendRequestAsync<GroupRemoveMemberAck>(seq => new GroupRemoveMember(
+                    seq, control.TimestampMs(), MsgType.GroupRemoveMember, id, deviceId), ct);
                 if (!ack.Ok)
                     throw new ApiException(ErrorCode.BadRequest, "移出成员失败（未登录或非所有者）");
                 hub.Publish(new { ev = WsEventNames.DeviceList });
@@ -149,8 +149,8 @@ public static class GroupsApi
         {
             try
             {
-                var ack = await control.SendRequestAsync<GroupInviteGenAck>(new GroupInviteGen(
-                    control.NextSeq(), control.TimestampMs(), MsgType.GroupInviteGen, id, Revoke: false), ct);
+                var ack = await control.SendRequestAsync<GroupInviteGenAck>(seq => new GroupInviteGen(
+                    seq, control.TimestampMs(), MsgType.GroupInviteGen, id, Revoke: false), ct);
                 if (!ack.Ok || string.IsNullOrEmpty(ack.InviteCode))
                     throw new ApiException(ErrorCode.BadRequest, "邀请码生成失败（未登录或非所有者）");
                 return Api.Ok(new { inviteCode = ack.InviteCode });
@@ -163,8 +163,8 @@ public static class GroupsApi
         {
             try
             {
-                var ack = await control.SendRequestAsync<GroupInviteGenAck>(new GroupInviteGen(
-                    control.NextSeq(), control.TimestampMs(), MsgType.GroupInviteGen, id, Revoke: true), ct);
+                var ack = await control.SendRequestAsync<GroupInviteGenAck>(seq => new GroupInviteGen(
+                    seq, control.TimestampMs(), MsgType.GroupInviteGen, id, Revoke: true), ct);
                 if (!ack.Ok)
                     throw new ApiException(ErrorCode.BadRequest, "邀请码撤销失败（未登录或非所有者）");
                 return Api.Ok(null);
@@ -177,8 +177,8 @@ public static class GroupsApi
         {
             try
             {
-                var resp = await control.SendRequestAsync<JoinRequestsResponse>(new JoinRequests(
-                    control.NextSeq(), control.TimestampMs(), MsgType.JoinRequests,
+                var resp = await control.SendRequestAsync<JoinRequestsResponse>(seq => new JoinRequests(
+                    seq, control.TimestampMs(), MsgType.JoinRequests,
                     JoinRequestAction.List, id, null), ct);
                 return Api.Ok(resp.Items.Select(r =>
                     new GroupRequestView(r.RequestId, r.GroupId, r.DeviceId, r.DeviceName, r.CreatedAtMs)));
@@ -200,8 +200,8 @@ public static class GroupsApi
     {
         try
         {
-            var ack = await control.SendRequestAsync<JoinRequestsAck>(new JoinRequests(
-                control.NextSeq(), control.TimestampMs(), MsgType.JoinRequests, action, null, requestId), ct);
+            var ack = await control.SendRequestAsync<JoinRequestsAck>(seq => new JoinRequests(
+                seq, control.TimestampMs(), MsgType.JoinRequests, action, null, requestId), ct);
             if (!ack.Ok)
                 throw new ApiException(ErrorCode.BadRequest, "审批失败（申请已处理或非所有者）");
             hub.Publish(new { ev = WsEventNames.DeviceList });

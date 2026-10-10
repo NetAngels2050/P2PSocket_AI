@@ -21,8 +21,8 @@ public static class UpgradeApi
                 // 已建立会话现取（0x03 非主动类，passive 亦允许——02 §2.5 清单不含）
                 if (control.State == ControlClientState.Established)
                 {
-                    var fresh = await control.SendRequestAsync<UpdateInfoResponse>(new UpdateInfoRequest(
-                        control.NextSeq(), control.TimestampMs(), MsgType.UpdateInfo), ct);
+                    var fresh = await control.SendRequestAsync<UpdateInfoResponse>(seq => new UpdateInfoRequest(
+                        seq, control.TimestampMs(), MsgType.UpdateInfo), ct);
                     return Api.Ok(ToView(fresh));
                 }
                 // 版本不符/通道未建立：回落拒答窗口缓存（无缓存=尚未发生版本拒答，无可引导）

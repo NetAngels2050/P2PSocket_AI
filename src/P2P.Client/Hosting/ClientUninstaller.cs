@@ -137,7 +137,7 @@ public static class ClientUninstaller
                 await Task.Delay(50, timeoutCts.Token);
             }
 
-            await control.SendAsync(new UnbindMe(control.NextSeq(), control.TimestampMs(),
+            await control.SendAsync(seq => new UnbindMe(seq, control.TimestampMs(),
                 MsgType.UnbindMe), timeoutCts.Token);
 
             // 服务端删行后 CloseAsync("unbound")：连接离开 Established（凭据已删不可再 Established）

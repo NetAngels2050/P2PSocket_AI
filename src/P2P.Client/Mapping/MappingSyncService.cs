@@ -150,8 +150,8 @@ public sealed class MappingSyncService
                 throw new MappingException(ErrorCode.Conflict, "同协议本地端口已被占用");
 
             var peer = await ResolvePeerAsync(clean.TargetRemoteCode, ct);
-            var ack = await _control.SendRequestAsync<MappingUpsertAck>(new MappingUpsert(
-                _control.NextSeq(), _control.TimestampMs(), MsgType.MappingUpsert,
+            var ack = await _control.SendRequestAsync<MappingUpsertAck>(seq => new MappingUpsert(
+                seq, _control.TimestampMs(), MsgType.MappingUpsert,
                 null, clean.Name, clean.LocalPort, clean.Proto, clean.TargetRemoteCode,
                 clean.TargetAddr, clean.TargetPort, Enabled: false), ct);
 
@@ -230,8 +230,8 @@ public sealed class MappingSyncService
             var wasEnabled = m.Enabled;
             if (wasEnabled) await _engine.DisableAsync(mappingId); // 配置变更须重启监听
 
-            await _control.SendRequestAsync<MappingUpsertAck>(new MappingUpsert(
-                _control.NextSeq(), _control.TimestampMs(), MsgType.MappingUpsert,
+            await _control.SendRequestAsync<MappingUpsertAck>(seq => new MappingUpsert(
+                seq, _control.TimestampMs(), MsgType.MappingUpsert,
                 mappingId, clean.Name, clean.LocalPort, clean.Proto, clean.TargetRemoteCode,
                 clean.TargetAddr, clean.TargetPort, wasEnabled), ct);
 
@@ -261,8 +261,8 @@ public sealed class MappingSyncService
         {
             Find(mappingId);
             await _engine.DisableAsync(mappingId);
-            await _control.SendRequestAsync<MappingDeleteAck>(new MappingDelete(
-                _control.NextSeq(), _control.TimestampMs(), MsgType.MappingDelete, mappingId), ct);
+            await _control.SendRequestAsync<MappingDeleteAck>(seq => new MappingDelete(
+                seq, _control.TimestampMs(), MsgType.MappingDelete, mappingId), ct);
             _store.State.Mappings.RemoveAll(m => m.MappingId == mappingId);
             await _store.SaveAsync(ct);
         }
@@ -299,8 +299,8 @@ public sealed class MappingSyncService
         uint offset = 0;
         while (true)
         {
-            var resp = await _control.SendRequestAsync<DeviceListResponse>(new DeviceListRequest(
-                _control.NextSeq(), _control.TimestampMs(), MsgType.DeviceList, offset, 100), ct);
+            var resp = await _control.SendRequestAsync<DeviceListResponse>(seq => new DeviceListRequest(
+                seq, _control.TimestampMs(), MsgType.DeviceList, offset, 100), ct);
             var hit = resp.Items.FirstOrDefault(i => i.RemoteCode == remoteCode);
             if (hit is not null) return hit;
             if (!resp.HasMore) break;
@@ -310,8 +310,8 @@ public sealed class MappingSyncService
     }
 
     private Task<MappingUpsertAck> UpsertServerAsync(StoredMapping m, bool enabled, CancellationToken ct)
-        => _control.SendRequestAsync<MappingUpsertAck>(new MappingUpsert(
-            _control.NextSeq(), _control.TimestampMs(), MsgType.MappingUpsert,
+        => _control.SendRequestAsync<MappingUpsertAck>(seq => new MappingUpsert(
+            seq, _control.TimestampMs(), MsgType.MappingUpsert,
             m.MappingId, m.Name, m.LocalPort, m.Proto, m.TargetRemoteCode,
             m.TargetAddr, m.TargetPort, enabled), ct);
 
