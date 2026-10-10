@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- M4-05 基准 harness（NFR-11/13/14、09 §3、TD-24 L1）：console 工程不进 CI 常规轮
+       （dotnet test 不发现），手动跑法见同目录 README.md；输出 out/benchmark/*.csv+summary.md -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\P2P.Client\P2P.Client.csproj" />
+    <ProjectReference Include="..\..\P2P.Server\P2P.Server.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- NatSimulator 三件（UdpNatSimulator/TcpNatSimulator/StubStunUpstream）与集成测试共享同一源文件
+         （零拷贝单一事实源；三文件无 Xunit 依赖，可被非测试工程 link 编译） -->
+    <Compile Include="..\..\..\tests\P2P.IntegrationTests\NatSimulator\*.cs" Link="NatSimulator\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>
