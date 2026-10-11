@@ -175,8 +175,11 @@ public sealed class MappingEngine : ITunnelChannelHandler, IAsyncDisposable
             throw new ArgumentException($"proto 须为 tcp|udp（得 {config.Proto}）", nameof(config));
 
         if (_mappings.TryGetValue(config.MappingId, out var existing)
-            && existing.Config.Equals(config) && (existing.Listener is not null || existing.UdpListener is not null))
+            && existing.Config.Equals(config) && existing.State != MappingState.Invalid
+            && (existing.Listener is not null || existing.UdpListener is not null))
             return Task.CompletedTask; // 幂等（同步层 diff 后才会重复到达）
+        // invalid 例外（P3 补恢复路径，2026-10-11 实机发现）：MarkInvalid 拆毁运行时但不摘表、
+        // Listener 字段保持非空——若不豁免，幂等短路会吞掉重新启用（invalid 态滞留到手工停用/启用）
         if (existing is not null)
             _ = DisableAsync(config.MappingId);
 

@@ -229,6 +229,29 @@ public sealed class MappingEngineTests
     }
 
     [Fact]
+    public async Task invalid后重新enable_拆旧重建_重新排队打洞()
+    {
+        // 残留缺陷回归（P3 补恢复链，2026-10-11 实机发现）：MarkInvalid 拆毁运行时但不摘表、
+        // Listener 字段保持非空——EnableAsync 幂等短路曾据字段误判"在位"吞掉重新启用，
+        // invalid 态滞留至手工停用/启用（登出 0x75 后登录补恢复失效）
+        await using var topo = new Topology();
+        var mappingId = Guid.NewGuid();
+        var config = new MappingConfig(mappingId, "m-inv", (ushort)FreePort(),
+            "tcp", "self", 80, topo.PeerB);
+        await topo.EngineA.EnableAsync(config);
+        await UntilAsync(() => topo.PuncherA.Initiated.Count == 1, "首次打洞出队");
+
+        // 0x75 失效（M2-15）：MarkInvalid 拆监听/关 channel 置 invalid——运行时滞留表内
+        await topo.EngineA.MarkInvalidAsync(mappingId, "invalidated:LoggedOut");
+        Assert.Equal(MappingState.Invalid, topo.EngineA.Snapshots.Single().State);
+
+        // 登录补恢复路径（P3）：再次 EnableAsync —— invalid 须穿透幂等短路，先拆后建重新入队
+        await topo.EngineA.EnableAsync(config);
+        Assert.Equal(MappingState.Punching, topo.EngineA.Snapshots.Single().State); // 修复前：no-op 停留 Invalid
+        await UntilAsync(() => topo.PuncherA.Initiated.Count == 2, "二次打洞出队");
+    }
+
+    [Fact]
     public async Task 隧道存活时enable直达direct_accept_OPEN_DATA往返()
     {
         await using var target = new LocalServer(echo: true);
