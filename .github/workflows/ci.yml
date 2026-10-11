@@ -1,4 +1,7 @@
 # CI（08 §4）：M1 仅 test job；build/package matrix 随 M4 打包任务接入
+# 全链四阶段与 build/build.sh 同序（build → export-ts → pnpm build → test），本地仍以
+# build.sh 为单一入口；CI 侧拆为独立 step——任一阶段红即一眼定位到环（整段式
+# "Build & Test" 一次红无法区分失败环节，2026-10-11 run#5 排障实录）。
 name: ci
 on:
   push:
@@ -9,6 +12,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # 防真挂起烧满默认 360 分钟额度（全链绿跑 ≈5 分钟，余量充足）
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -18,8 +22,24 @@ jobs:
         with:
           node-version: "22"
       - run: corepack enable pnpm
-      - name: Build & Test（08 §2 全链）
-        run: sh build/build.sh
+
+      - name: dotnet build（08 §2）
+        run: dotnet build AI-P2P.sln -c Release
+
+      # export-ts：反射导出 API 类型 → ui-shared/types/api.d.ts（06 §5，M1-31 落地生成器）
+      - name: export-ts 类型导出（06 §5、M1-31）
+        run: dotnet run --project src/Tools/ExportTs -c Release
+
+      # 前端：显式 frozen-lockfile 安装（此前依赖 pnpm 跑脚本前的自动补装，行为隐式；
+      # 锁文件不同步时 CI 立即红，而非静默按最新解析）→ workspace 构建产物直写两宿主 wwwroot
+      - name: 前端 pnpm install + build（08 §2）
+        run: |
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web --filter @p2p/client-app --filter @p2p/server-app build
+
+      - name: dotnet test 全仓（08 §2）
+        run: dotnet test AI-P2P.sln -c Release --no-build
+
       # M1-36：coverlet.collector 的 runsettings Threshold 经两法验证不拦运行
       # （--collect 与 -s 并用仍 0 退出），故门槛为显式解析 cobertura 根 line-rate。
       - name: Core 覆盖率采集 + 门槛 ≥70%（09 §1/AI-28）
