@@ -184,6 +184,7 @@ public sealed class ClientRuntime : IAsyncDisposable
         _control.ServerPush += OnServerPush; // 0x71 PunchInvite → 被邀请方打洞（02 §5.1③）
         _wizard.LoginSucceeded += username => // P3 修复：登录后可见性就位，补发启用映射恢复
         {   //（即发即忘：不阻塞登录请求；恢复内部逐条容错，可见性未及生效单条失败仅日志）
+            _api.Context.LoginUser = username; // P2 方案 a：web/向导/自动重放三路径统一 /api/auth/me 口径
             Log?.Invoke($"[restore] 登录成功（{username}）：补发启用映射恢复");
             _ = Task.Run(async () =>
             {
@@ -291,6 +292,30 @@ public sealed class ClientRuntime : IAsyncDisposable
             // 控制通道建立（已注册设备唯一就绪态 = Established；NeedRegister 意味着服务端侧设备已删，交由重连循环）
             while (_control.State != ControlClientState.Established && !ct.IsCancellationRequested)
                 await Task.Delay(50, ct);
+
+            // P2 方案 a（2026-10-11 批复）：记住的凭据自动重放登录——登录态跨重启保持。
+            // 登录成功经 LoginSucceeded 事件统一驱动（web 会话用户名+映射补恢复），故先于 startup 恢复。
+            // 失败策略：密码已失效（Ack.Ok=false）即清除凭据（重启后须手动登录一次）；
+            // 发送异常（通道竞态）保留凭据下次启动再试。
+            if (_state.State.RememberedUsername is { } rememberedUser
+                && _state.State.RememberedPassword is { } rememberedPassword)
+            {
+                try
+                {
+                    var ack = await _wizard.LoginBindAsync(rememberedUser, rememberedPassword, ct);
+                    if (ack.Ok) Log?.Invoke($"[auth] 已自动登录（{rememberedUser}，记住的凭据，P2 方案 a）");
+                    else
+                    {
+                        await _wizard.ForgetCredentialsAsync(CancellationToken.None);
+                        Log?.Invoke($"[auth] 记住的凭据登录失败（密码已变更或账号不可用），已清除——请手动登录");
+                    }
+                }
+                catch (OperationCanceledException) { /* 停机 */ }
+                catch (Exception e)
+                {
+                    Log?.Invoke($"[auth] 自动登录异常（{e.Message}）：凭据保留，下次启动重试");
+                }
+            }
 
             // 恢复启用中的映射：启用即打洞（01 §4.1/FR-C-306）；单条失败不连坐其余
             //（登录后可见性就位时经 LoginSucceeded 补发重入，P3 修复）

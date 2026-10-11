@@ -49,6 +49,7 @@ public static class AuthApi
                 var ack = await control.SendRequestAsync<UserLogoutAck>(seq => new UserLogout(
                     seq, control.TimestampMs(), MsgType.UserLogout), ct);
                 if (!ack.Ok) throw new ApiException(ErrorCode.BadRequest, "登出失败");
+                await registration.ForgetCredentialsAsync(ct); // P2 方案 a：登出即忘记（重启不再自动登录）
                 ctx.LoginUser = null;
                 return Api.Ok(null);
             }
@@ -77,6 +78,9 @@ public static class AuthApi
                     oldPassword, newPassword), ct);
                 if (!ack.Ok)
                     throw new ApiException(ErrorCode.Unauthorized, "旧密码错误或修改被拒绝");
+                // P2 方案 a：改密成功同步更新记住的凭据（防重启后自动重放旧密码失败）
+                if (ctx.LoginUser is { } user)
+                    await registration.RememberCredentialsAsync(user, newPassword, ct);
                 return Api.Ok(null);
             }
             catch (Exception e) { return Api.Fail(e); }

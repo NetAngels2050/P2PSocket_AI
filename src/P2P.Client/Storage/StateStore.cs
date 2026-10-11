@@ -6,6 +6,7 @@
 // - 机密字段在序列化边界经 ISecretProtector 加密（07 §4/SEC-23）。
 using System.IO;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -61,6 +62,8 @@ public sealed class StateStore
                 StaticPrivateKey = dto.StaticPrivateKeyBox is null ? null : _protector.Unprotect(Convert.FromBase64String(dto.StaticPrivateKeyBox)),
                 RemoteCode = dto.RemoteCode,
                 VirtualIp = dto.VirtualIp,
+                RememberedUsername = dto.RememberedUsername,
+                RememberedPassword = UnprotectCredential(dto.RememberedPasswordBox),
                 Mappings = dto.Mappings ?? [],
             };
         }
@@ -87,6 +90,9 @@ public sealed class StateStore
                 StaticPrivateKeyBox = State.StaticPrivateKey is null ? null : Convert.ToBase64String(_protector.Protect(State.StaticPrivateKey)),
                 RemoteCode = State.RemoteCode,
                 VirtualIp = State.VirtualIp,
+                RememberedUsername = State.RememberedUsername,
+                RememberedPasswordBox = State.RememberedPassword is null ? null
+                    : Convert.ToBase64String(_protector.Protect(Encoding.UTF8.GetBytes(State.RememberedPassword))),
                 Mappings = State.Mappings.Count == 0 ? null : State.Mappings, // WhenWritingNull 省略空表
             };
             await AtomicFile.WriteAllBytesAsync(_path,
@@ -102,6 +108,22 @@ public sealed class StateStore
         if (File.Exists(tmp)) File.Delete(tmp);
     }
 
+    /// <summary>凭据盒还原（P2 方案 a）：损坏/解密失败只丢凭据不连坐注册态——
+    /// 主 catch 会整文件重建（凭 macCode 恢复），对凭据过重；此处降级为 null+告警。</summary>
+    private string? UnprotectCredential(string? boxed)
+    {
+        if (boxed is null) return null;
+        try
+        {
+            return Encoding.UTF8.GetString(_protector.Unprotect(Convert.FromBase64String(boxed)));
+        }
+        catch (Exception e) when (e is FormatException or CryptographicException)
+        {
+            Recovered?.Invoke($"记住的账号凭据还原失败（{e.GetType().Name}），已清除——下次启动须手动登录一次");
+            return null;
+        }
+    }
+
     /// <summary>state.json 落盘形态（03 §5 字段；机密为保护后 base64，07 §4）。</summary>
     private sealed class StateFileDto
     {
@@ -110,6 +132,8 @@ public sealed class StateStore
         public string? StaticPrivateKeyBox { get; set; }
         public string? RemoteCode { get; set; }
         public string? VirtualIp { get; set; }
+        public string? RememberedUsername { get; set; }
+        public string? RememberedPasswordBox { get; set; }
         public List<StoredMapping>? Mappings { get; set; }
     }
 }

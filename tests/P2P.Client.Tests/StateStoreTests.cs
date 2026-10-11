@@ -136,6 +136,52 @@ public sealed class StateStoreTests : IDisposable
         Assert.False(store.State.IsRegistered);
     }
 
+    // ── P2 方案 a（2026-10-11 批复）：凭据记住/忘记的落盘形态与损坏容错 ──
+
+    [Fact]
+    public async Task Credentials_RoundTrip_PasswordProtectedAtRest()
+    {
+        var store = NewStore();
+        store.State.DeviceId = Guid.NewGuid();
+        store.State.DeviceSecret = new byte[] { 1, 2, 3 };
+        store.State.RememberedUsername = "alice";
+        store.State.RememberedPassword = "secret123";
+
+        await store.SaveAsync();
+
+        var raw = File.ReadAllText(Path.Combine(_dir, ClientPaths.StateFileName));
+        Assert.Contains("alice", raw);                          // 用户名非机密明文（可读可 grep）
+        Assert.DoesNotContain("secret123", raw);                // 密码明文不落盘（07 §4）
+        Assert.Contains(Convert.ToBase64String(Reverse("secret123"u8.ToArray())), raw); // 保护后形态在盘
+
+        var reloaded = NewStore();
+        reloaded.Load();
+        Assert.Equal("alice", reloaded.State.RememberedUsername);
+        Assert.Equal("secret123", reloaded.State.RememberedPassword);
+    }
+
+    [Fact]
+    public void CorruptedCredentialBox_DropsCredentialsOnly_KeepsRegistration()
+    {
+        // 凭据盒损坏只丢凭据（降级为未记住，下次手动登录），不连坐设备注册态——
+        // 与主自愈（整文件重建凭 macCode 恢复）不同级：凭据丢了无恢复代价
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(Path.Combine(_dir, ClientPaths.StateFileName),
+            $$"""{ "deviceId": "{{Guid.NewGuid()}}", "rememberedUsername": "alice", "rememberedPasswordBox": "!!!not-base64!!!" }""");
+
+        string? recovered = null;
+        var store = NewStore();
+        store.Recovered += r => recovered = r;
+
+        store.Load();
+
+        Assert.NotNull(recovered);
+        Assert.Contains("凭据", recovered);
+        Assert.Equal("alice", store.State.RememberedUsername); // 用户名保留（与密码独立）
+        Assert.Null(store.State.RememberedPassword);
+        Assert.NotNull(store.State.DeviceId);                  // 注册态不受扰
+    }
+
     // ── 辅助 ─────────────────────────────────────────────────────────
 
     private static byte[] Reverse(byte[] bytes)

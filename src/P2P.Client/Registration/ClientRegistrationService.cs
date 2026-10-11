@@ -127,15 +127,37 @@ public sealed class ClientRegistrationService(
 
     /// <summary>向导第二步·已有账号登录绑定（0x21）：设备 owner 绑定持久在库（A-2 双设备同账号前提）。
     /// P1 修复：0x21 属主动类（02 §2.5），登出后的 passive 会话本地拒发 2002——先强制重连
-    /// （新会话初始 Normal）再发，落地 05 §324"重新登录须重连后再发"意图。</summary>
+    /// （新会话初始 Normal）再发，落地 05 §324"重新登录须重连后再发"意图。
+    /// P2 方案 a（2026-10-11 批复）：成功即记住凭据（重启自动重放），登出忘记。</summary>
     public async Task<UserLoginAck> LoginBindAsync(string username, string password, CancellationToken ct = default)
     {
         if (client.Capability == CapabilityMode.Passive)
             await client.ReconnectAsync(ct);
         var ack = await client.SendRequestAsync<UserLoginAck>(seq => new UserLogin(
             seq, client.TimestampMs(), MsgType.UserLogin, username, password), ct);
-        if (ack.Ok) LoginSucceeded?.Invoke(username);
+        if (ack.Ok)
+        {
+            await RememberCredentialsAsync(username, password, ct);
+            LoginSucceeded?.Invoke(username);
+        }
         return ack;
+    }
+
+    /// <summary>记住账号凭据（P2 方案 a）：密码经 ISecretProtector 落盘（07 §4，与 deviceSecret 同级）。
+    /// 登录成功与改密成功两入口（改密更新重放凭据，防重启后旧密码失败）。</summary>
+    public async Task RememberCredentialsAsync(string username, string password, CancellationToken ct = default)
+    {
+        store.State.RememberedUsername = username;
+        store.State.RememberedPassword = password;
+        await store.SaveAsync(ct);
+    }
+
+    /// <summary>忘记账号凭据（登出语义=P2 方案 a 的"登出即忘记"）。</summary>
+    public async Task ForgetCredentialsAsync(CancellationToken ct = default)
+    {
+        store.State.RememberedUsername = null;
+        store.State.RememberedPassword = null;
+        await store.SaveAsync(ct);
     }
 
     /// <summary>向导第二步·新建账号（0x20）：成功后仍需 <see cref="LoginBindAsync"/> 登录。</summary>

@@ -22,6 +22,13 @@ public sealed class ClientState
     /// <summary>虚拟 IP（统一下发固定 .2，OQ-13）。</summary>
     public string? VirtualIp { get; set; }
 
+    /// <summary>记住的账号（P2 方案 a，2026-10-11 批复）：登录成功记住、登出即忘记。
+    /// 用户名非机密（日志/UI 均展示），明文落盘；密码仅驻内存，落盘经 ISecretProtector（07 §4）。</summary>
+    public string? RememberedUsername { get; set; }
+
+    /// <summary>记住的密码（明文仅驻内存，同 deviceSecret 口径；落盘为 RememberedPasswordBox）。</summary>
+    public string? RememberedPassword { get; set; }
+
     /// <summary>端口映射表（M1-28：0x60/0x61 全量同步服务端后本地持久化，重启恢复）。</summary>
     public List<StoredMapping> Mappings { get; set; } = [];
 

@@ -301,6 +301,88 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         await runtime.DisposeAsync();
     }
 
+    // ── ①c P2 方案 a（2026-10-11 批复）：登录态跨重启保持（凭据记住/自动重放/登出忘记）──
+
+    [Fact]
+    public async Task 登录后重启_凭据自动重放_登录态与映射恢复保持_登出即忘记()
+    {
+        var b = await SeedRegisteredWithMappingAsync("p2-b", null);
+        var a = await SeedRegisteredWithMappingAsync("p2-a", b, createSharedGroup: false);
+        var dirA = Path.Combine(_rootDir, "p2-a");
+
+        // 第一段：登录（凭据落盘）→ 恢复到位
+        var runtime1 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var logs1 = new List<string>();
+        runtime1.Log += m => { lock (logs1) logs1.Add(m); };
+        await runtime1.StartAsync();
+        string username;
+        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime1.WebPort}") })
+        {
+            await WaitLogAsync(logs1, "恢复失败（startup）"); // 未登录+无共同分组：确定性受阻（①b 同款前置）
+            username = $"u{Guid.NewGuid():N}"[..12];
+            using (var reg = await http.PostAsync("/api/auth/register", new StringContent(
+                JsonSerializer.Serialize(new { username, password = "secret123" }),
+                System.Text.Encoding.UTF8, "application/json")))
+            {
+                Assert.Equal(0, JsonDocument.Parse(await reg.Content.ReadAsStringAsync())
+                    .RootElement.GetProperty("code").GetInt32());
+            }
+            await using (var db = _factory.CreateDbContext())
+            {
+                db.Devices.Single(d => d.Id == b.DeviceId).OwnerUserId =
+                    db.Users.Single(u => u.Username == username).Id;
+                await db.SaveChangesAsync();
+            }
+            using (var login = await http.PostAsync("/api/auth/login", new StringContent(
+                JsonSerializer.Serialize(new { username, password = "secret123" }),
+                System.Text.Encoding.UTF8, "application/json")))
+            {
+                Assert.Equal(0, JsonDocument.Parse(await login.Content.ReadAsStringAsync())
+                    .RootElement.GetProperty("code").GetInt32());
+            }
+            await WaitStateAsync(http, "failed"); // 登录补恢复生效（①b 同口径终态）
+        }
+        await runtime1.DisposeAsync();
+        // 凭据确已落盘（用户名明文字段）
+        Assert.Contains(username, await File.ReadAllTextAsync(Path.Combine(dirA, "state.json")));
+
+        // 第二段：重启 → 记住的凭据自动重放 → 登录态+可见性就位 → 映射恢复（无手工登录）
+        var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var logs2 = new List<string>();
+        runtime2.Log += m => { lock (logs2) logs2.Add(m); };
+        await runtime2.StartAsync();
+        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime2.WebPort}") })
+        {
+            await WaitLogAsync(logs2, $"已自动登录（{username}");
+            using var me = await http.GetAsync("/api/auth/me");
+            var meRoot = JsonDocument.Parse(await me.Content.ReadAsStringAsync()).RootElement.GetProperty("data");
+            Assert.Equal(username, meRoot.GetProperty("username").GetString());
+            Assert.Equal("normal", meRoot.GetProperty("mode").GetString());
+            await WaitStateAsync(http, "failed"); // 自动登录→LoginSucceeded→补恢复（或 startup 时已可见）→ failed
+
+            // 第三段：登出即忘记（凭据清除）→ 再重启不再自动登录
+            using (var logout = await http.PostAsync("/api/auth/logout", null))
+            {
+                Assert.Equal(0, JsonDocument.Parse(await logout.Content.ReadAsStringAsync())
+                    .RootElement.GetProperty("code").GetInt32());
+            }
+        }
+        await runtime2.DisposeAsync();
+        var runtime3 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var logs3 = new List<string>();
+        runtime3.Log += m => { lock (logs3) logs3.Add(m); };
+        await runtime3.StartAsync();
+        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime3.WebPort}") })
+        {
+            await WaitLogAsync(logs3, "恢复失败（startup）"); // 无凭据无登录：回到 ①b 受阻形态
+            using var me = await http.GetAsync("/api/auth/me");
+            var meRoot = JsonDocument.Parse(await me.Content.ReadAsStringAsync()).RootElement.GetProperty("data");
+            Assert.Null(meRoot.GetProperty("username").GetString());
+            Assert.Equal("disabled", await GetMappingStateAsync(http));
+        }
+        await runtime3.DisposeAsync();
+    }
+
     // ── ② 未注册向导模式：占位地址 → 向导换址（退避唤醒）→ 注册 → 自动续跑注册后路径 ──
 
     [Fact]
