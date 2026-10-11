@@ -91,8 +91,10 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
 
     private sealed record SeededDevice(Guid DeviceId, byte[] DeviceSecret, string RemoteCode);
 
-    /// <summary>种已注册设备 + 服务端映射行（Enabled=true）+ A/B 共同分组（重启后无登录态仍 L2 可见）。</summary>
-    private async Task<SeededDevice> SeedRegisteredWithMappingAsync(string name, SeededDevice? peer)
+    /// <summary>种已注册设备 + 服务端映射行（Enabled=true）+ A/B 共同分组（重启后无登录态仍 L2 可见；
+    /// createSharedGroup=false：无分组变体——可见性仅剩"同账号设备"路径，登录前目标不可见（P3 用例））。</summary>
+    private async Task<SeededDevice> SeedRegisteredWithMappingAsync(string name, SeededDevice? peer,
+        bool createSharedGroup = true)
     {
         await using var db = _factory.CreateDbContext();
         var secret = RandomGenerator.Bytes(32);
@@ -131,18 +133,21 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
                 CreatedAt = DateTime.UtcNow,
             });
             // 共同分组（无登录态路径的 L2 可见性；owner=内置 admin，外键要求真实用户）
-            var group = new Group
+            if (createSharedGroup)
             {
-                Id = Guid.NewGuid(),
-                Name = $"rt-{Guid.NewGuid():N}"[..16],
-                OwnerUserId = db.Users.Single(u => u.IsAdmin).Id,
-                IsDefault = false,
-                JoinPolicy = "free",
-                CreatedAt = DateTime.UtcNow,
-            };
-            db.Groups.Add(group);
-            db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, DeviceId = device.Id, Approved = true });
-            db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, DeviceId = peer.DeviceId, Approved = true });
+                var group = new Group
+                {
+                    Id = Guid.NewGuid(),
+                    Name = $"rt-{Guid.NewGuid():N}"[..16],
+                    OwnerUserId = db.Users.Single(u => u.IsAdmin).Id,
+                    IsDefault = false,
+                    JoinPolicy = "free",
+                    CreatedAt = DateTime.UtcNow,
+                };
+                db.Groups.Add(group);
+                db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, DeviceId = device.Id, Approved = true });
+                db.GroupMembers.Add(new GroupMember { Id = Guid.NewGuid(), GroupId = group.Id, DeviceId = peer.DeviceId, Approved = true });
+            }
         }
         await db.SaveChangesAsync();
 
@@ -233,6 +238,67 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
             await Task.Delay(200, cts.Token);
         }
         Assert.Fail($"等待映射状态 {state} 超时（当前 {current}）");
+    }
+
+    /// <summary>等待日志行出现（后台线程写入，锁保护快照读）。</summary>
+    private static async Task WaitLogAsync(List<string> logs, string substring)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        while (!cts.IsCancellationRequested)
+        {
+            lock (logs) { if (logs.Any(l => l.Contains(substring))) return; }
+            await Task.Delay(100, cts.Token);
+        }
+        Assert.Fail($"等待日志“{substring}”超时");
+    }
+
+    // ── ①b P3 修复：无共同分组启动恢复受阻（目标不可见）→ 登录成功自动补恢复 ──
+
+    [Fact]
+    public async Task 启动未登录恢复受阻_登录成功后自动补恢复启用映射()
+    {
+        var b = await SeedRegisteredWithMappingAsync("lr-b", null);
+        var a = await SeedRegisteredWithMappingAsync("lr-a", b, createSharedGroup: false);
+        var dirA = Path.Combine(_rootDir, "lr-a");
+
+        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var logs = new List<string>();
+        runtime.Log += m => { lock (logs) logs.Add(m); };
+        await runtime.StartAsync();
+        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") })
+        {
+            // 启动恢复确定性失败：无登录态且无共同分组 → 0x40 不可见 → 4003（仅日志，映射停留 disabled）
+            await WaitLogAsync(logs, "恢复失败（startup）");
+            Assert.Equal("disabled", await GetMappingStateAsync(http));
+
+            // 建号（0x20）→ 目标设备绑同账号（可见性前提：本账号设备；外键直改库模拟对端登录过的效果）
+            var username = $"u{Guid.NewGuid():N}"[..12];
+            using (var reg = await http.PostAsync("/api/auth/register", new StringContent(
+                JsonSerializer.Serialize(new { username, password = "secret123" }),
+                System.Text.Encoding.UTF8, "application/json")))
+            {
+                Assert.Equal(0, JsonDocument.Parse(await reg.Content.ReadAsStringAsync())
+                    .RootElement.GetProperty("code").GetInt32());
+            }
+            await using (var db = _factory.CreateDbContext())
+            {
+                db.Devices.Single(d => d.Id == b.DeviceId).OwnerUserId =
+                    db.Users.Single(u => u.Username == username).Id;
+                await db.SaveChangesAsync();
+            }
+
+            // 登录（0x21）→ LoginSucceeded → 恢复重入：目标可见 → 启用即打洞 → STUN 不可达确定性 failed
+            using (var login = await http.PostAsync("/api/auth/login", new StringContent(
+                JsonSerializer.Serialize(new { username, password = "secret123" }),
+                System.Text.Encoding.UTF8, "application/json")))
+            {
+                Assert.Equal(0, JsonDocument.Parse(await login.Content.ReadAsStringAsync())
+                    .RootElement.GetProperty("code").GetInt32());
+            }
+            await WaitStateAsync(http, "failed"); // 用例①同口径：真打洞器出队→STUN 探测不可达→failed
+            await WaitLogAsync(logs, "登录成功");
+        }
+        await runtime.DisposeAsync();
     }
 
     // ── ② 未注册向导模式：占位地址 → 向导换址（退避唤醒）→ 注册 → 自动续跑注册后路径 ──

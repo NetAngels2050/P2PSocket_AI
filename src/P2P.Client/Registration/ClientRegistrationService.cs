@@ -41,6 +41,10 @@ public sealed class ClientRegistrationService(
     /// <summary>注册成功（网卡已创建；FR-C-101 宿主可开浏览器/打印 URL）。</summary>
     public event Action<RegistrationResult>? RegistrationCompleted;
 
+    /// <summary>账号登录绑定成功（0x21 Ack.Ok；P3 修复）：web 登录与向导登录路径均触发——
+    /// 可见性前提变化（会话 OwnerUserId 就位），宿主据此补发启用映射恢复。</summary>
+    public event Action<string>? LoginSucceeded;
+
     /// <summary>最近一次使用的 macCode（覆盖式恢复提示用，OQ-14）。</summary>
     public string? LastMacCode { get; private set; }
 
@@ -121,10 +125,18 @@ public sealed class ClientRegistrationService(
         return result;
     }
 
-    /// <summary>向导第二步·已有账号登录绑定（0x21）：设备 owner 绑定持久在库（A-2 双设备同账号前提）。</summary>
-    public Task<UserLoginAck> LoginBindAsync(string username, string password, CancellationToken ct = default)
-        => client.SendRequestAsync<UserLoginAck>(seq => new UserLogin(
+    /// <summary>向导第二步·已有账号登录绑定（0x21）：设备 owner 绑定持久在库（A-2 双设备同账号前提）。
+    /// P1 修复：0x21 属主动类（02 §2.5），登出后的 passive 会话本地拒发 2002——先强制重连
+    /// （新会话初始 Normal）再发，落地 05 §324"重新登录须重连后再发"意图。</summary>
+    public async Task<UserLoginAck> LoginBindAsync(string username, string password, CancellationToken ct = default)
+    {
+        if (client.Capability == CapabilityMode.Passive)
+            await client.ReconnectAsync(ct);
+        var ack = await client.SendRequestAsync<UserLoginAck>(seq => new UserLogin(
             seq, client.TimestampMs(), MsgType.UserLogin, username, password), ct);
+        if (ack.Ok) LoginSucceeded?.Invoke(username);
+        return ack;
+    }
 
     /// <summary>向导第二步·新建账号（0x20）：成功后仍需 <see cref="LoginBindAsync"/> 登录。</summary>
     public Task<UserRegisterAck> CreateUserAsync(string username, string password, CancellationToken ct = default)

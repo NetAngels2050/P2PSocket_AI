@@ -688,6 +688,32 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
         Assert.Equal(ErrorCode.Ok, login.code);
     }
 
+    // ── ⑥b P1 修复：登出后再登录——passive 会话自动重连复位 Normal 后发 0x21，不再 2002 ──
+
+    [Fact]
+    public async Task 登出后再登录_自动重连复位_不再哑节点拒绝()
+    {
+        var a = await SeedDeviceAsync("web-dev-g2");
+        await using var stack = await StartStackAsync(a);
+        var username = $"u{Guid.NewGuid():N}"[..12];
+        await PostAsync(stack, "/api/auth/register", new { username, password = "secret123" });
+
+        // 登录 → 登出（连接保持，FR-C-603）：同连接再发 0x21 属主动类，修复前本地拒发 2002
+        var login1 = await PostAsync(stack, "/api/auth/login", new { username, password = "secret123" });
+        Assert.Equal(ErrorCode.Ok, login1.code);
+        var logout = await PostAsync(stack, "/api/auth/logout", null);
+        Assert.Equal(ErrorCode.Ok, logout.code);
+        Assert.Equal("passive", stack.Control.Capability.ToString().ToLowerInvariant());
+
+        // 再登录：LoginBindAsync 先强制重连（新会话初始 Normal）再发 0x21 → 成功且 mode=normal
+        var login2 = await PostAsync(stack, "/api/auth/login", new { username, password = "secret123" });
+        Assert.Equal(ErrorCode.Ok, login2.code); // 修复前此处 2002"哑节点模式不允许此操作"
+        Assert.Equal("normal", login2.data!.Value.GetProperty("mode").GetString());
+        var me = await GetAsync(stack, "/api/auth/me");
+        Assert.Equal("normal", me.data!.Value.GetProperty("mode").GetString());
+        Assert.Equal(username, me.data!.Value.GetProperty("username").GetString());
+    }
+
     // ── ⑦ WS mapping_state + mapping_stats：真实隧道流量（完成判定）──
 
     [Fact]

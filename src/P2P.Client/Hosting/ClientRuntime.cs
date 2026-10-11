@@ -89,6 +89,7 @@ public sealed class ClientRuntime : IAsyncDisposable
     private WebApplication _app = null!;
     private NicHealthMonitor? _nicMonitor;
     private Task? _relayRetryLoop;
+    private readonly SemaphoreSlim _restoreMutex = new(1, 1); // 启用映射恢复重入闸（启动与登录补发并发防扰）
     private int _registeredPathStarted;
     private int _disposed;
     private int _upgradeBrowserOpened; // 版本拒答浏览器引导去重（每进程一次，M2-26）
@@ -181,6 +182,16 @@ public sealed class ClientRuntime : IAsyncDisposable
             _lanSegments, Path.Combine(_options.BaseDir, "logs"), _subnetConflicts, _stunTester,
             _devicePinger, _host, PeerLabelLookup); // M2-27：白名单镜像 + 日志目录同源；M3-14 诊断区（tunnels/rekey 走本地隧道表）
         _control.ServerPush += OnServerPush; // 0x71 PunchInvite → 被邀请方打洞（02 §5.1③）
+        _wizard.LoginSucceeded += username => // P3 修复：登录后可见性就位，补发启用映射恢复
+        {   //（即发即忘：不阻塞登录请求；恢复内部逐条容错，可见性未及生效单条失败仅日志）
+            Log?.Invoke($"[restore] 登录成功（{username}）：补发启用映射恢复");
+            _ = Task.Run(async () =>
+            {
+                try { await RestoreEnabledMappingsAsync("login"); }
+                catch (OperationCanceledException) { /* 停机 */ }
+                catch (Exception e) { Log?.Invoke($"[restore] 登录补发恢复异常：{e.Message}"); }
+            });
+        };
 
         // ③ 本地 Web（两种分支都启：向导也经它完成注册）
         WebPort = _settings.Settings.LocalWebPort;
@@ -282,11 +293,8 @@ public sealed class ClientRuntime : IAsyncDisposable
                 await Task.Delay(50, ct);
 
             // 恢复启用中的映射：启用即打洞（01 §4.1/FR-C-306）；单条失败不连坐其余
-            foreach (var m in _state.State.Mappings.Where(m => m.Enabled).ToList())
-            {
-                try { await _sync.EnableAsync(m.MappingId, CancellationToken.None); }
-                catch (Exception e) { Log?.Invoke($"[restore] 映射 {m.Name} 恢复失败：{e.Message}"); }
-            }
+            //（登录后可见性就位时经 LoginSucceeded 补发重入，P3 修复）
+            await RestoreEnabledMappingsAsync("startup");
 
             // 中继回切周期循环（M2-19，02 §6.2/OQ-7）：relay 态设备对每 60s 重试直连
             _relayRetryLoop = RelayRetryLoopAsync(_cts.Token);
@@ -295,6 +303,34 @@ public sealed class ClientRuntime : IAsyncDisposable
         }
         catch (OperationCanceledException) { /* 停机 */ }
         catch (Exception e) { Log?.Invoke($"[restore] 注册后路径异常：{e.Message}"); }
+    }
+
+    /// <summary>启用映射恢复（P3 修复，可重入）：仅补引擎快照缺失或 invalid 的启用映射——
+    /// 运行态在位（punching/direct/relay/failed）不扰（failed 有自身重试语义，04 §2.5）；
+    /// 引擎 <see cref="MappingEngine.EnableAsync"/> 对无监听旧运行时先拆后建，重复启用安全。
+    /// 入口：冷启动（startup）与登录成功补发（login——启动时未登录，无共同分组目标按
+    /// 可见性判不可见而失败，登录后会话 OwnerUserId 就位即可见，须补一次）。
+    /// 信号量闸并发（启动与登录补发同时到达时串行；第二次扫描见运行态已补齐自然空转）；
+    /// 单条失败不连坐其余。</summary>
+    private async Task RestoreEnabledMappingsAsync(string trigger)
+    {
+        if (Volatile.Read(ref _disposed) == 1) return;
+        await _restoreMutex.WaitAsync();
+        try
+        {
+            var engineStates = _engine.Snapshots.ToDictionary(s => s.Config.MappingId);
+            foreach (var m in _state.State.Mappings.Where(m => m.Enabled).ToList())
+            {
+                try
+                {
+                    var snap = engineStates.GetValueOrDefault(m.MappingId);
+                    if (snap is not null && snap.State != MappingState.Invalid) continue; // 运行态在位
+                    await _sync.EnableAsync(m.MappingId, CancellationToken.None);
+                }
+                catch (Exception e) { Log?.Invoke($"[restore] 映射 {m.Name} 恢复失败（{trigger}）：{e.Message}"); }
+            }
+        }
+        finally { _restoreMutex.Release(); }
     }
 
     /// <summary>真打洞器接线（静态键须已落盘；未注册阶段由占位打洞器兜住，注册完成即接替）。</summary>
@@ -339,7 +375,9 @@ public sealed class ClientRuntime : IAsyncDisposable
             // 活中继会话复用缝（M2-37，05 §4）：回切周期重打失败再回退时复用 TunnelHost 表内会话，
             // 不再新分配整体替换（排水窗杀传输中 channel——公网实测 60s 周期下网页长传输必断）
             liveRelaySessionLookup: peerId =>
-                _host.Get(peerId) is { ViaRelay: true, IsClosed: false } reused ? reused : null));
+                _host.Get(peerId) is { ViaRelay: true, IsClosed: false } reused ? reused : null,
+            // TCP 打洞诊断日志缝（P4 修复）：计划线+池收尾线——结果线由调度器既有四型日志承载
+            log: m => Log?.Invoke($"[punch-tcp] {m}")));
         Log?.Invoke($"打洞器已接线（STUN={stunEp?.ToString() ?? "解析失败"}，派生自控制地址 :3478，TD-07）");
     }
 

@@ -118,16 +118,19 @@ public sealed class Puncher : IPuncher, IDisposable
     private readonly Func<Guid, bool> _relayFallback; // 本地设备级回退配置（缺省恒 false=默认关，PRD 06 §2）
     private readonly RelayAllocator? _relayAllocator; // 0x74 分配缝（缺省不回退，M2-18）
     private readonly LiveRelaySessionLookup? _liveRelaySession; // 活中继会话复用缝（缺省不复用，M2-37）
+    private readonly Action<string>? _log; // 诊断日志缝（P4 修复：TCP 打洞计划/池收尾线，缺省静默）
     private int _disposed;
 
     public Puncher(PunchRequestSender sendPunchRequest, EndpointReporter reportEndpoints,
         StunProbeDelegate probe, EcKeyPair staticKey,
         ITunnelChannelHandler? handler = null, PunchOptions? options = null,
         StunTcpProbeDelegate? tcpProbe = null, Func<Guid, bool>? relayFallbackLookup = null,
-        RelayAllocator? relayAllocator = null, LiveRelaySessionLookup? liveRelaySessionLookup = null)
+        RelayAllocator? relayAllocator = null, LiveRelaySessionLookup? liveRelaySessionLookup = null,
+        Action<string>? log = null)
     {
         _sendPunchRequest = sendPunchRequest;
         _reportEndpoints = reportEndpoints;
+        _log = log;
         _probe = probe;
         _tcpProbe = tcpProbe;
         _staticKey = staticKey;
@@ -268,6 +271,10 @@ public sealed class Puncher : IPuncher, IDisposable
                 ?? throw new IOException("PunchRequest Ack 未携带对端 TCP 端点");
             var n = PunchPolicy.Normalize(ack.PunchCount); // OQ-19：以服务端回填 N 为准
             var target = TcpPunchPlan.TargetEndpoint(peerMapped, n);
+            // 计划线（P4 修复）：本端映射端点/端口 L/扇形 N/瞄准端点全量落日志——现场判
+            // "瞄准是否命中对端实际分配"（H2 漂移）/ 对照对端计划线定位偏差侧
+            _log?.Invoke($"计划(A) target={targetDeviceId.ToString()[..8]} mapped={mappedL} L={portL}"
+                        + $" N={n} peerMapped={peerMapped} aim={target}");
 
             // ③④ listen(L) + N 并发 connect → 候选连接扇出 THello1 → 首条 THello2 的连接胜出
             using var initiator = PtpHandshake.StartInitiator(ack.SessionId, _staticKey, ack.Peer.StaticPubKey);
@@ -300,6 +307,9 @@ public sealed class Puncher : IPuncher, IDisposable
             }
             finally
             {
+                // 池收尾线（P4 修复）：failedConnect>0=有候选被明确拒（RST，过滤/防火墙征象）；
+                // 全 0 而超时=静默丢弃（NAT 不回注/H1 入站拦截）——H4/H1 现场判别依据
+                _log?.Invoke($"池收尾(A) live={fleet.LiveConnections} failedConnect={fleet.FailedConnects}");
                 await fleet.DisposeAsync(); // 幂等：成功路径已 Release 胜出，仅关其余 N−1 与 listener
             }
         }
@@ -477,6 +487,8 @@ public sealed class Puncher : IPuncher, IDisposable
             ?? throw new IOException("PunchInvite 未携带发起方 TCP 端点");
         var n = PunchPolicy.Normalize(invite.PunchCount); // OQ-19：与发起方同一 N（服务端统一下发）
         var target = TcpPunchPlan.TargetEndpoint(peerMapped, n);
+        _log?.Invoke($"计划(B) target={invite.Peer.DeviceId.ToString()[..8]} mapped={mappedL} L={portL}"
+                    + $" N={n} peerMapped={peerMapped} aim={target}");
 
         // 建池先于 0x76：connect 的 SYN 尽早出发与 A 交叉（小时差靠 SYN 重传覆盖，02 §5.2 实现备注）
         var fleet = TcpPunchFleet.Create(_options.BindAddress, portL, target, n, PtpFrameType.THello1);
@@ -500,6 +512,7 @@ public sealed class Puncher : IPuncher, IDisposable
         }
         finally
         {
+            _log?.Invoke($"池收尾(B) live={fleet.LiveConnections} failedConnect={fleet.FailedConnects}");
             await fleet.DisposeAsync(); // 幂等：成功路径已 Release 胜出，仅关其余候选与 listener
         }
     }

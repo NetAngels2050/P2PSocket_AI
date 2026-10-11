@@ -85,6 +85,7 @@ public sealed class ControlClient : IAsyncDisposable
     private bool _stopped;
     private IReadOnlyList<(string Host, int Port)> _serverAddrs; // 可换（向导选定地址，M1-29）
     private CancellationTokenSource? _backoffWake; // 退避等待可被换址唤醒（M1-30：向导选定地址即重连，不等满退避期）
+    private int _sessionGen; // 会话代数：每条新连接 Established 递增（ReconnectAsync 区分新旧会话）
 
     /// <summary>状态变迁通知（UI/宿主展示连接性）。</summary>
     public event Action<ControlClientState>? StateChanged;
@@ -233,6 +234,33 @@ public sealed class ControlClient : IAsyncDisposable
         try { _tcp?.Dispose(); } catch { /* 已关 */ } // 杀当前连接 → 读循环退出 → 下一轮新表
     }
 
+    /// <summary>强制重连并等待新会话就绪（02 §2.5"重新登录须重连后再发"的落地路径，P1 修复）：
+    /// 杀当前连接（同 <see cref="UpdateServerAddrs"/> 手法）→ 主循环退避后重建 → 以会话代数
+    /// 区分新旧连接，等到<b>新代数</b>的 Established 才返回（新会话初始 Normal，能力复位）。
+    /// 15s 预算覆盖杀连接后首退避（1s）+ 握手；超时/停机抛 <see cref="ControlClientException"/>。</summary>
+    public async Task ReconnectAsync(CancellationToken ct = default)
+    {
+        if (_stopped) throw new ControlClientException("控制通道已停止，无法重连");
+        var gen = Volatile.Read(ref _sessionGen);
+        Log?.Invoke("强制重连：passive 会话复位 Normal（02 §2.5）");
+        try { Volatile.Read(ref _backoffWake)?.Cancel(); } // 唤醒退避等待（不必等满旧退避期）
+        catch (ObjectDisposedException) { /* 唤醒窗口竞态：等待已自然结束 */ }
+        try { _tcp?.Dispose(); } catch { /* 已关 */ } // 杀当前连接 → 读循环退出 → 下一轮重连
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        while (true)
+        {
+            if (_stopped) throw new ControlClientException("重连期间通道已停止");
+            if (State == ControlClientState.Established && Volatile.Read(ref _sessionGen) != gen)
+                return;
+            try { await Task.Delay(50, timeout.Token); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new ControlClientException($"强制重连超时（当前状态 {State}）");
+            }
+        }
+    }
+
     // ── 连接生命周期 ─────────────────────────────────────────────────
 
     /// <summary>等待首个就绪（已注册设备 = Established；未注册 = NeedRegister）。</summary>
@@ -370,6 +398,7 @@ public sealed class ControlClient : IAsyncDisposable
         _hmacEnabled = true;
         SetCapability(CapabilityMode.Normal); // 镜像服务端：新会话初始 Normal（02 §2.5）
         SetState(ControlClientState.Established);
+        Interlocked.Increment(ref _sessionGen); // 新连接就绪（CompleteRegistration 是同连接迁移，不计）
     }
 
     /// <summary>版本拒答处理（M2-26，FR-C-904/02 §2.3）：5004 后服务端受理窗内 0x03 是唯一可发消息
