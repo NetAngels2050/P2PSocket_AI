@@ -1,6 +1,6 @@
 # P2P 内网穿透产品 · 技术设计文档
 
-> 版本：v1.55　创建日期：2026-08-19　状态：待评审
+> 版本：v1.56　创建日期：2026-08-19　状态：待评审
 > 依据：[产品需求文档 PRD v0.6](../prd/README.md)（决策 D1~D21，D3 经 v0.4 修订；开放问题 OQ-1~OQ-19 已全部决议）
 > 定位：开发阶段的**施工图纸**——所有实现以本文档为准；与 PRD 冲突时以 PRD 为准并提出修订。
 
@@ -131,3 +131,4 @@
 | 2026-10-02 | v1.53 | **M3-18 公网部署实弹抓出的 P0 启动序缺陷修复**：Host.StartAsync 首次解析 IHostedService 时即构造全部托管服务实例——ServerWebHostService（M3-06）ctor 尾参注入 StunService/RelayService 触发 DI 工厂读 server_config，早于 ServerHostService.StartAsync 步骤① 的 Initialize；存量 M2-36 库缺 M3-15 新键 stun_alt_addr 即在读点崩溃（全新库未建表同理——既有测试夹具全显式预初始化，掩盖该路径）。修复=Program 容器构建前先行 DbInitializer.Initialize（Migrate+幂等种子，置于 --reset-admin/--op 早退之后保「库已存在」语义；08 §7 升级方法同步注记）+ DbInitializerTests 存量库缺新增键补齐回归用例。实机证据：修复后 M2-36 库升级 M3 部署启动成功（清单 M3-18 修订行） |
 | 2026-10-03 | v1.54 | **Linux TUN 首次实机运行抓出 SIOCGIFINDEX 目标错误**（M3-18/A-12 服务端机客户端部署发现）：TUNSETIFF 后取 if_index 误把 SIOCGIFINDEX 发到 tun fd（字符设备，tun_chr_ioctl 未知命令返 EINVAL=errno 22，接口创建即失败）——该 ioctl 属 inet socket 层，须经 AF_INET UDP socket 发出（与 05 §1.3 自愈探测既有模式一致）；Windows 侧 Nic 测试平台依赖全跳过+A-10 Linux 轮未执行，路径首次实机运行才暴露。修复=QueryIfIndex 独立 helper（UDP socket + ownsHandle 句柄唯一收口 fd 生命周期），05 §1.3 补实现注记 |
 | 2026-10-07 | v1.55 | **M4 任务清单编制回流**（新增 TD-24，PRD 无回流——M4 范围 09 §1 既有）：基准环境分级——09 §3.1"同机房两台 VPS"不可得，落地 L1 本地自动化基准（src/Tools/P2P.Bench：NatSimulator 打洞成功率矩阵/建立耗时分布/回环吞吐与延迟对照/资源采样，报告标注回环基线局限）+L2 实机预留位（公网真实打洞统计脱敏取数+两台 VPS iperf3 预留位）；随清单定案：版本号 1.0.0（08 §1 版本注入统一值）；非目标收录 CI release 流水线/NativeAOT/代码签名（本地 package 脚本为交付形态） |
+| 2026-10-11 | v1.56 | **M4 收官后人工反馈缺陷批次 1 落地同步**（PRD 无回流——P2 凭据语义属 07 §4/SEC-23 既有框架的延展，用户批复记录见 docs/问题清单/2026-10-11-人工反馈问题清单.md §2.3）：**P2 登录态保持·方案 a"记住我"**——03 §5 客户端本地文件树 state.json 增 rememberedUsername（明文，用户名非机密）+rememberedPasswordBox（ISecretProtector 保护，与 deviceSecret 同机制同级：Windows=DPAPI 机器范围+用途熵、Linux=明文+0600）注记，语义=登录即记住/改密更新/登出即忘记/重启自动重放 0x21，凭据盒损坏单独容错只丢凭据不连坐注册态；07 §4 增实现注记（保护形态与语义边界+**威胁模型权衡**：设备持有人或读盘恶意软件额外获得账号密码——"设备持有=设备身份可用"扩大至账号级，用户批复接受的权衡）；P1/P3/P4（批次 1 其余三项）为实现缺陷修复无设计面变更，处置台账见问题清单 |
