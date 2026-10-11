@@ -52,8 +52,14 @@ public sealed class RekeyWindowTests
 
         public EchoServer()
         {
-            _listener = new TcpListener(IPAddress.Loopback, 0);
-            _listener.Start();
+            // 专有带内探测绑定（24000-28000）：:0 临时段顺序分配易与并行类探测/监听相邻相撞
+            // （跨类串扰家族，同 MappingEngineTests.LocalServer 迁带缘由）。
+            while (true)
+            {
+                _listener = new TcpListener(IPAddress.Loopback, Random.Shared.Next(24000, 28000));
+                try { _listener.Start(); break; }
+                catch (SocketException) { }
+            }
             Port = (ushort)((IPEndPoint)_listener.LocalEndpoint).Port;
             _ = Task.Run(async () =>
             {

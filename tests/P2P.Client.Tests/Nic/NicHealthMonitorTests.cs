@@ -106,13 +106,20 @@ public sealed class NicHealthMonitorTests
 
     // ── listen_failed 自动重试（引擎侧，M2-24）──────────────────────
 
+    /// <summary>测试专有端口带内探测（24000-28000，避开 Windows 临时端口段 49152+）：
+    /// :0 临时段顺序分配下，探测结果与并行测试类的 :0 监听相邻相撞（跨类串扰家族）；
+    /// 带内 :0 分配器不踏足，仅剩带内随机对撞（~1/7000，探测重试兜底）。</summary>
     private static int FreePort()
     {
-        var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
+        while (true)
+        {
+            var port = Random.Shared.Next(24000, 28000);
+            var l = new TcpListener(IPAddress.Loopback, port);
+            try { l.Start(); }
+            catch (SocketException) { continue; }
+            l.Stop();
+            return port;
+        }
     }
 
     private sealed class FakePuncher : IPuncher

@@ -182,7 +182,10 @@ public sealed class TunnelSessionTests
     [Fact]
     public async Task 会话表_取用_替换_移除_断链摘表()
     {
-        var host = new TunnelHost(TimeSpan.FromMilliseconds(100)); // M2-19 排水窗缩短（默认 2s，NET-75）
+        // 生产默认排水窗（2s，NET-75）：曾注入 100ms 图快——Attach 后紧跟的"旧会话未关"断言
+        // 在与真实定时器赛跑，GC/调度停顿 ≥100ms 即翻车（本地冷启与 CI 实录，失败时长 ~120ms）。
+        // 2s 窗下断言需 ≥2s 停顿才可能失守，竞态实际消除。
+        var host = new TunnelHost();
         var disconnected = new ConcurrentQueue<(Guid Peer, string Reason)>();
         host.SessionDisconnected += (s, reason) => disconnected.Enqueue((s.PeerDeviceId, reason));
         var peerB = Guid.NewGuid();
@@ -200,7 +203,7 @@ public sealed class TunnelSessionTests
             host.Attach(a2);
             Assert.False(a.IsClosed); // 排水窗内旧会话保持接收（在途帧送达）
             Assert.Same(a2, host.Get(peerB));
-            await UntilAsync(() => a.IsClosed, "排水窗到期旧会话关闭");
+            await UntilAsync(() => a.IsClosed, "排水窗到期旧会话关闭", TimeSpan.FromSeconds(8));
             Assert.Contains(disconnected, e => e.Peer == peerB && e.Reason.Contains("replaced_drained"));
 
             // 主动移除（解绑/停机）
@@ -222,7 +225,8 @@ public sealed class TunnelSessionTests
     [Fact]
     public async Task 回切排水_窗内旧会话在途帧送达_到期关闭_新会话即刻承载()
     {
-        var host = new TunnelHost(TimeSpan.FromMilliseconds(400));
+        // 生产默认排水窗（2s，NET-75）：窗内"旧会话未关"断言同前述——不与真实定时器赛跑。
+        var host = new TunnelHost();
         await using (host)
         {
             var peerB = Guid.NewGuid();
@@ -243,7 +247,7 @@ public sealed class TunnelSessionTests
             await b.SendDataAsync(a.AllocateChannelId(), "in-flight"u8.ToArray());
             await UntilAsync(() => ha.Events.Any(e => e.Kind == "data"), "排水窗内旧会话在途帧送达");
 
-            await UntilAsync(() => a.IsClosed, "排水窗到期旧会话关闭");
+            await UntilAsync(() => a.IsClosed, "排水窗到期旧会话关闭", TimeSpan.FromSeconds(8));
             Assert.False(a2.IsClosed); // 新会话不受旧会话关闭影响
             Assert.Same(a2, host.Get(peerB));
         }

@@ -59,8 +59,16 @@ public sealed class MappingEngineTests
         public LocalServer(bool echo)
         {
             _echo = echo;
-            _listener = new TcpListener(IPAddress.Loopback, 0);
-            _listener.Start();
+            // 专有带内探测绑定（24000-28000）：曾用 :0（OS 临时段）——顺序分配下与并行类的
+            // 死端口 connect 目标相邻相撞，外来连接污染 Connections 计数（"段外拒绝 Actual=2"
+            // 与 TcpPunchFleetTests FailedConnects 超时同轮翻车的根因）。带内分配器不踏足，
+            // 仅剩带内随机对撞（重试兜底）。
+            while (true)
+            {
+                _listener = new TcpListener(IPAddress.Loopback, Random.Shared.Next(24000, 28000));
+                try { _listener.Start(); break; }
+                catch (SocketException) { }
+            }
             Port = (ushort)((IPEndPoint)_listener.LocalEndpoint).Port;
             _ = Task.Run(async () =>
             {

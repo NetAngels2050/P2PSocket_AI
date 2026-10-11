@@ -124,17 +124,38 @@ public sealed class TcpFrameTransportTests
 /// <summary>TcpPunchFleet：listen(L)+N 并发 connect、第 1 条沿用 L、入池等待首帧、胜出释放其余关闭。</summary>
 public sealed class TcpPunchFleetTests
 {
-    private static int FreePort()
+    /// <summary>测试专有端口带内取 port..port+span-1 连续空闲段（24000-28000，避开 Windows
+    /// 临时端口段 49152+）。曾用 :0 探测——临时端口顺序分配下，并行测试类的 :0 监听常与本类
+    /// 探测结果相邻取号，"死端口"假设被打洞 connect 击中对方 echo 服务（FailedConnects 永不到
+    /// 位 + 对方 Connections 计数被污染，本地冷启与 CI 同型翻车实录）。带内 :0 分配器不踏足，
+    /// 仅剩带内随机对撞（~1/7000，探测重试兜底）。</summary>
+    private static int FreePort(int span = 1)
     {
-        var s = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        s.Bind(new IPEndPoint(IPAddress.Loopback, 0));
-        var port = ((IPEndPoint)s.LocalEndPoint!).Port;
-        s.Dispose();
-        return port;
+        while (true)
+        {
+            var basePort = Random.Shared.Next(24000, 28000 - span);
+            List<TcpListener>? taken = null;
+            try
+            {
+                for (var p = basePort; p < basePort + span; p++)
+                {
+                    var l = new TcpListener(IPAddress.Loopback, p);
+                    l.Start();
+                    (taken ??= []).Add(l);
+                }
+                return basePort;
+            }
+            catch (SocketException) { /* 带内对撞：换段重探 */ }
+            finally
+            {
+                if (taken is not null)
+                    foreach (var l in taken) l.Stop();
+            }
+        }
     }
 
-    /// <summary>取一个与 keepClear 各端口（含 ±1 邻位）均不同的空闲端口——Windows 临时端口
-    /// 顺序分配，连续取号常得相邻端口，端口预测类测试须避开 connect 目标/监听位自撞。</summary>
+    /// <summary>取一个与 keepClear 各端口（含 ±1 邻位）均不同的空闲端口——端口预测类测试的
+    /// connect 目标/监听位须与已知端口保持邻位距离（带内随机对撞由探测重试兜底）。</summary>
     private static int FreePortApart(params int[] keepClear)
     {
         while (true)
@@ -258,8 +279,9 @@ public sealed class TcpPunchFleetTests
     [Fact]
     public async Task 不对称N_目标端口无人监听_等待超时必miss()
     {
-        // B 实际落位（N_B=3）：Qbase+2 有监听；A 以 N_A=2 瞄准 Qbase+1——预测基准错位
-        var qbase = FreePort();
+        // B 实际落位（N_B=3）：Qbase+2 有监听；A 以 N_A=2 瞄准 Qbase+1——预测基准错位。
+        // 三口连续一并探测（qbase=死、qbase+1=死目标、qbase+2=监听位），保证"死端口"前提成立。
+        var qbase = FreePort(span: 3);
         var realPort = qbase + 2;
         var listener = new TcpListener(IPAddress.Loopback, realPort);
         listener.Start(4);
@@ -323,13 +345,19 @@ public sealed class PuncherTcpTests
                 new EndpointPair(null, new P2P.Core.Protocol.Endpoint("127.0.0.1", (ushort)ClosedPort())), 3, false));
         }
 
+        /// <summary>带内探测空闲口（24000-28000）：ack 端点随后的 TCP connect 须真的拒连，
+        /// :0 临时段顺序分配易与并行类监听相邻相撞（跨类串扰家族，同 FreePort 迁带缘由）。</summary>
         private static int ClosedPort()
         {
-            var s = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            s.Bind(new IPEndPoint(IPAddress.Loopback, 0));
-            var port = ((IPEndPoint)s.LocalEndPoint!).Port;
-            s.Dispose();
-            return port;
+            while (true)
+            {
+                var port = Random.Shared.Next(24000, 28000);
+                var l = new TcpListener(IPAddress.Loopback, port);
+                try { l.Start(); }
+                catch (SocketException) { continue; }
+                l.Stop();
+                return port;
+            }
         }
     }
 
