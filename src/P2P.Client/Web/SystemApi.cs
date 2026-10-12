@@ -31,7 +31,7 @@ public static class SystemApi
                 : control.State == ControlClientState.Established ? "running" : "degraded";
             return Api.Ok(new { phase, serverReachable = control.IsReady,
                 protocolVersion = ProtocolVersion.Current,
-                conflict = subnetConflicts?.Check(store.State.VirtualIp),
+                conflict = subnetConflicts?.Check(store.State.VirtualIp, trigger: "api/system/state"),
                 version = AppVersion.Version, commit = AppVersion.Commit });
         });
 

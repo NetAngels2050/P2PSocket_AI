@@ -9,6 +9,7 @@
 // 现场重算（冲突解除无本机事件可听，惰性重算才可靠——REST 真相源驱动 WS 提示，TD-16）。
 using System.Buffers.Binary;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Numerics;
 using P2P.Nic;
@@ -43,14 +44,16 @@ public sealed class SubnetConflictDetector
     /// 未应用时枚举中通常也不存在自身地址，不构成误报源）。</summary>
     public void OnNicApplied(string? adapterName) => _ownAdapter = adapterName;
 
-    /// <summary>现场检测（无冲突返回 null）。与上次结果比对，变化即发 ConflictsChanged。</summary>
-    public SubnetConflictState? Check(string? virtualIp)
+    /// <summary>现场检测（无冲突返回 null）。与上次结果比对，变化即发 ConflictsChanged。
+    /// trigger=触发来源标注（如 api/system/state / 注册后路径首查 / 网卡恢复沿重查），随枚举
+    /// 失败日志输出——多路调用共用本检测器，无标注无法定位失败由哪条路径触发。</summary>
+    public SubnetConflictState? Check(string? virtualIp, string? trigger = null)
     {
         SubnetConflictState? state = null;
         if (IPAddress.TryParse(virtualIp, out var vip) && vip.AddressFamily == AddressFamily.InterNetwork)
         {
             var subnet = DeriveSubnet(vip);
-            var (addresses, routes) = SafeSurvey();
+            var (addresses, routes) = SafeSurvey(trigger);
             var items = FindConflicts(subnet, _ownAdapter, addresses, routes);
             if (items.Count > 0) state = new SubnetConflictState(subnet.ToString(), [.. items]);
         }
@@ -106,14 +109,57 @@ public sealed class SubnetConflictDetector
         return new IPNetwork(new IPAddress(b), 24);
     }
 
-    private (IReadOnlyList<SurveyAddress>, IReadOnlyList<SurveyRoute>) SafeSurvey()
+    private string? _surveyErrorKey;
+    private long _surveyErrorRepeat;
+
+    /// <summary>枚举降级 + 失败日志：首错记录完整定位信息（触发源、异常类型、错误码、堆栈最内 6 帧）。
+    /// /api/system/state 每请求重算，失败会随前端轮询高频复现——同一错误（类型+消息相同）只记
+    /// 计数行（每 100 次一条），成功或错误变化后清除，下次首错再记全量。</summary>
+    private (IReadOnlyList<SurveyAddress>, IReadOnlyList<SurveyRoute>) SafeSurvey(string? trigger)
     {
-        try { return _survey(); }
+        try
+        {
+            var snapshot = _survey();
+            if (Volatile.Read(ref _surveyErrorRepeat) != 0)
+                lock (_gate) { _surveyErrorKey = null; _surveyErrorRepeat = 0; }
+            return snapshot;
+        }
         catch (Exception e)
         {
-            Log?.Invoke($"[nic] 网络面枚举失败（按空快照降级）：{e.Message}");
+            long repeat;
+            lock (_gate)
+            {
+                var key = $"{e.GetType().FullName}|{e.Message}";
+                if (key == _surveyErrorKey) _surveyErrorRepeat++;
+                else { _surveyErrorKey = key; _surveyErrorRepeat = 1; }
+                repeat = _surveyErrorRepeat;
+            }
+            var tag = $"{e.GetType().Name}（{DescribeCode(e)}）：{e.Message}";
+            if (repeat == 1)
+                Log?.Invoke($"[nic] 网络面枚举失败（按空快照降级）：触发={trigger ?? "未标注"}；{tag}；"
+                            + $"堆栈：{CompactStack(e)}");
+            else if (repeat % 100 == 0)
+                Log?.Invoke($"[nic] 网络面枚举失败（按空快照降级）：触发={trigger ?? "未标注"}；同错已连续"
+                            + $"重复 {repeat} 次（{tag}；完整堆栈见该错误首次日志）");
             return ([], []);
         }
+    }
+
+    /// <summary>错误码提取：套接字/网信异常的原始码（如 10043 ProtocolNotSupported）比本地化文案可检索。</summary>
+    private static string DescribeCode(Exception e) => e switch
+    {
+        SocketException se => $"{(int)se.SocketErrorCode} {se.SocketErrorCode}",
+        NetworkInformationException nie => $"{nie.ErrorCode}",
+        _ => $"HRESULT 0x{e.HResult:X8}",
+    };
+
+    /// <summary>堆栈压成单行取最内 6 帧（逐行采集的日志里多行消息会破坏行结构；行号保留可定位到源）。</summary>
+    private static string CompactStack(Exception e)
+    {
+        var frames = (e.StackTrace ?? "无堆栈").Split('\n',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return string.Join(" <- ",
+            frames.Take(6).Select(f => f.StartsWith("at ", StringComparison.Ordinal) ? f[3..] : f));
     }
 
     private static bool StateEquals(SubnetConflictState? a, SubnetConflictState? b) =>

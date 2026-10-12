@@ -269,7 +269,7 @@ public sealed class ClientRuntime : IAsyncDisposable
 
                 // 冲突检测首查（M3-13，05 §1.4/FR-C-204）：Ensure 后主动跑一次（驱动日志+WS 提示）；
                 // 后续外部变化/解除由 /api/system/state 每请求现场重算反映（无本机事件可听）
-                _subnetConflicts.Check(_state.State.VirtualIp);
+                _subnetConflicts.Check(_state.State.VirtualIp, trigger: "注册后路径首查");
 
                 // 网卡自愈循环（M2-24，FR-C-202/05 §1.2）：30s 探测存在性与 IP 一致性，异常重建恢复。
                 // 启动 Ensure 失败同样纳入（首探测即重建尝试）；恢复沿立即重试 listen_failed 映射
@@ -278,7 +278,7 @@ public sealed class ClientRuntime : IAsyncDisposable
                 _nicMonitor.Log += m => Log?.Invoke(m);
                 _nicMonitor.Restored += () => _ = Task.Run(async () =>
                 {
-                    _subnetConflicts.Check(_state.State.VirtualIp); // 重建=地址/路由重新应用，重查冲突
+                    _subnetConflicts.Check(_state.State.VirtualIp, trigger: "网卡恢复沿重查"); // 重建=地址/路由重新应用，重查冲突
                     try { await _engine.RetryListenFailedAsync(); }
                     catch (Exception e) when (e is ObjectDisposedException or OperationCanceledException)
                     { /* 停机竞态：引擎已释放 */ }
