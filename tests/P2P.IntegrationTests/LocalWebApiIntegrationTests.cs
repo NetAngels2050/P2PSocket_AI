@@ -1071,6 +1071,26 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
         Assert.DoesNotContain("重连失败", text);
     }
 
+    [Fact]
+    public async Task 日志端点_当天日志被sink写句柄占用仍可读()
+    {
+        var a = await SeedDeviceAsync("log-lock-dev");
+        await using var stack = await StartStackAsync(a);
+        Directory.CreateDirectory(stack.LogsDir);
+        const string line1 = "2026-09-30 09:00:00.001 +08:00 [INF] 控制通道已建立";
+        const string line2 = "2026-09-30 09:00:01.000 +08:00 [INF] REKEY 完成";
+        var logFile = Path.Combine(stack.LogsDir, "client-20260930.log");
+        await File.WriteAllTextAsync(logFile, line1 + "\n" + line2 + "\n");
+
+        // 模拟 Program.cs shared sink：进程内以写模式常持当天日志句柄（Append + FileShare.ReadWrite）
+        await using var sink = File.Open(logFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+
+        // 读取须以 FileShare.ReadWrite 放行写方，否则共享冲突→Api.Fail→页面整页空
+        var page = await GetAsync(stack, "/api/logs");
+        Assert.Equal(ErrorCode.Ok, page.code);
+        Assert.Equal(2, page.data!.Value.GetProperty("total").GetInt32());
+    }
+
     // ── ⑫ 修改密码（M2-27，04 §2.3 /api/auth/change-password：0x23 全链）──
 
     [Fact]

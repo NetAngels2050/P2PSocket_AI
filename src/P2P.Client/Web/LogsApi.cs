@@ -94,7 +94,13 @@ public static partial class LogsApi
             // 单文件条目正序聚合，最后整体倒序并入（续行语义要求先正序归并）
             var fileEntries = new List<LogEntry>();
             LogEntry? current = null;
-            foreach (var line in File.ReadLines(file))
+            // FileShare.ReadWrite|Delete：当天文件被本进程 Serilog sink 以写模式持有（Program.cs
+            // shared:true 常开句柄）；File.ReadLines 的 FileShare.Read 与之冲突（共享异常→整页空），
+            // 读方须放行他人写——同 tail 类工具口径
+            using var fs = new FileStream(file, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.SequentialScan);
+            using var reader = new StreamReader(fs, Encoding.UTF8);
+            while (reader.ReadLine() is { } line)
             {
                 var m = regex.Match(line);
                 if (m.Success)
