@@ -36,7 +36,7 @@ public sealed class DeviceListPushTests : IAsyncLifetime
         var pusher = new DeviceListPusher(factory, _registry); // 订阅 registry 在线事件（M2-10）
         var router = new ControlMessageRouter(
             new RegistrationService(factory, _registry, audit),
-            new UserService(factory, audit),
+            new UserService(factory, audit, listPusher: pusher), // v1.58：0x13 改名触发 0x41
             new GroupService(factory, _registry, audit, pusher),
             _signaling,
             new MappingService(factory, audit),
@@ -252,6 +252,23 @@ public sealed class DeviceListPushTests : IAsyncLifetime
         Assert.True(dissolved!.Ok);
         _ = await owner.ReceiveAsync<DeviceListUpdate>();
         _ = await member.ReceiveAsync<DeviceListUpdate>();
+    }
+
+    // ── 0x13 改名（v1.58：UserService 触发点）────────────────────────
+
+    [Fact]
+    public async Task DeviceRename_Push041_ToPeersNotSelf()
+    {
+        var (a, _) = await ConnectLoggedInAsync("rename-a");
+        var (b, _) = await ConnectLoggedInAsync("rename-b"); // 同 admin 账号 = 互为 peers
+        await DrainPushesAsync(a);
+        await DrainPushesAsync(b);
+
+        await a.SendAsync(new DeviceUpdate(a.NextSeq(), a.Now(), MsgType.DeviceUpdate, "rename-a-new"));
+        var ack = await a.ReceiveSkippingPushesAsync<DeviceUpdateAck>();
+        Assert.True(ack!.Ok);
+        _ = await b.ReceiveAsync<DeviceListUpdate>();   // 同账号 peer 收 0x41 → refetch 0x40
+        await AssertNoPushAsync(a);                     // 发起端不收（本机前端由 PUT 成功路径自发提示）
     }
 
     // ── 哑节点不下发（02 §2.4）────────────────────────────────────────

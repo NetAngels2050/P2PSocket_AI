@@ -17,6 +17,7 @@ export interface SystemStateView {
 
 export interface DeviceView {
   deviceId: string | null;
+  deviceName: string | null; // v1.58：当前设备名（GET /api/device；改名后 PUT 成功即时更新）
   remoteCode: string | null;
   virtualIp: string | null;
   username: string | null;

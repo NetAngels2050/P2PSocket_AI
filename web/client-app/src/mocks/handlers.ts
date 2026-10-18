@@ -307,6 +307,7 @@ export function createHandlers(state: MockState = createDefaultState()) {
     http.get("*/api/device", () =>
       ok({
         deviceId: state.deviceId,
+        deviceName: state.devices.find((d) => d.deviceId === state.deviceId)?.deviceName ?? null,
         remoteCode: state.remoteCode,
         virtualIp: state.virtualIp,
         username: state.username,

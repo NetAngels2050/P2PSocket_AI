@@ -6,16 +6,19 @@ using P2P.Server.Data;
 namespace P2P.Server.Services;
 
 /// <summary>
-/// 用户与能力模式处理（02 §2.4 0x20/0x21/0x22/0x23/0x13；FR-S-201/202/205/106）：
+/// 用户与能力模式处理（02 §2.4 0x20/0x21/0x22/0x23/0x13；FR-S-201/202/205/106/107）：
 /// 注册受 registration_open 开关控制；登录绑定设备 owner 并切 normal；
 /// 登出切 passive（能力模式为会话态，05 §8）+ 本人映射 0x75(logged_out) 失效（M2-12，PRD 05 §4 L1 失效）；
 /// 改密（M2-27）：旧密码校验 → 覆写 hash（不裁会话——能力模式不变，05 §3）。
+/// 改名（v1.58，FR-S-107）：trim 后 1~64（与客户端 04 §2.1 口径一致，防协议直连绕过）→
+/// 改库 + 审计 device_rename + 0x41 推送（Ack 先于推送，M2-10 纪律）。
 /// </summary>
 public sealed class UserService(
     IDbContextFactory<AppDbContext> dbFactory,
     AuditLogger audit,
     TimeProvider? time = null,
-    InvalidationPusher? invalidation = null)
+    InvalidationPusher? invalidation = null,
+    DeviceListPusher? listPusher = null)
 {
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
@@ -123,10 +126,13 @@ public sealed class UserService(
             MsgType.UserChangePassword, true));
     }
 
-    /// <summary>0x13 设备改名（本机管理类，passive 允许——02 §2.5 矩阵）。</summary>
+    /// <summary>0x13 设备改名（本机管理类，passive 允许——02 §2.5 矩阵；FR-S-107）：
+    /// trim 后空白或超 64 字符 → Ack Ok=false；成功改库 + 审计 + 0x41 推送（同账号 ∪ 共同分组，
+    /// 与可见性同口径；发起端不收——本机前端由 PUT /api/device 成功路径自发 device_list 提示）。</summary>
     public async Task HandleDeviceUpdateAsync(ControlSession session, DeviceUpdate msg)
     {
-        if (string.IsNullOrWhiteSpace(msg.DeviceName))
+        var name = msg.DeviceName.Trim();
+        if (name.Length is < 1 or > 64)
         {
             await session.SendAsync(new DeviceUpdateAck(session.NextSeq(), session.ServerTimestamp(),
                 MsgType.DeviceUpdate, false));
@@ -134,8 +140,14 @@ public sealed class UserService(
         }
         await using var db = await dbFactory.CreateDbContextAsync();
         await db.Devices.Where(d => d.Id == session.DeviceId)
-            .ExecuteUpdateAsync(s => s.SetProperty(x => x.DeviceName, msg.DeviceName));
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.DeviceName, name));
+        await audit.WriteAsync("device_rename", session.DeviceId, userId: session.OwnerUserId,
+            detail: new { DeviceName = name });
         await session.SendAsync(new DeviceUpdateAck(session.NextSeq(), session.ServerTimestamp(),
             MsgType.DeviceUpdate, true));
+        // Ack 先于推送（M2-10 纪律）：0x41 提示帧，接收端 refetch 0x40
+        if (listPusher is not null)
+            await listPusher.NotifyDevicesAsync(
+                await DeviceListPusher.ResolveAccountPeersAsync(db, session.DeviceId));
     }
 }

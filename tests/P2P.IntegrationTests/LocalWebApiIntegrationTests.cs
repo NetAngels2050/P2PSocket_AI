@@ -505,6 +505,10 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
         var a = await SeedDeviceAsync("web-dev-c");
         await using var stack = await StartStackAsync(a);
 
+        // v1.58：未改名（state.json 无值，含存量升级）GET 回落主机名=注册默认名，仅展示
+        var before = await GetAsync(stack, "/api/device");
+        Assert.Equal(Environment.MachineName, before.data!.Value.GetProperty("deviceName").GetString());
+
         var empty = await PutAsync(stack, "/api/device", new { deviceName = "" });
         Assert.Equal(ErrorCode.BadRequest, empty.code);
 
@@ -513,6 +517,11 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
         await using var db = _factory.CreateDbContext();
         var row = await db.Devices.AsNoTracking().SingleAsync(d => d.Id == a.DeviceId);
         Assert.Equal("renamed-dev", row.DeviceName);
+
+        // v1.58：改名持久化 state.json（重启/凭据恢复沿用）+ GET /api/device 回 deviceName
+        Assert.Equal("renamed-dev", stack.Store.State.DeviceName);
+        var device = await GetAsync(stack, "/api/device");
+        Assert.Equal("renamed-dev", device.data!.Value.GetProperty("deviceName").GetString());
     }
 
     // ── ④ 账号端点：register/login/logout/me 全链路 + 错误码 ──────────

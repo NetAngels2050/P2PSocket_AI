@@ -3,8 +3,9 @@
 //   （Established→running，其余 degraded）+ 通道可达性 + 协议版本；
 //   M3-13 增 conflict 字段（FR-C-204）：每请求现场重算（冲突解除无本机事件可听，惰性重算
 //   才可靠）；值变化经 ConflictsChanged → WS subnet_conflict 提示（TD-16 REST 真相源）；
-// - GET /api/device：state.json 三要素 + 登录账号 + 能力模式；
-// - PUT /api/device：0x13 改名（空名 1001；passive 本地拒 2002）。
+// - GET /api/device：state.json 三要素 + 登录账号 + 能力模式 + 设备名（v1.58）；
+// - PUT /api/device：0x13 改名（空名 1001；passive 本地拒 2002）；成功后 state.json 持久化
+//   + WS device_list 提示（本机列表行即时刷新；服务端 0x41 推同账号/同组对端，v1.58）。
 // reset-remote-code（0x14）→ DeviceApi（M2-15）；settings GET/PUT → 配置任务。
 // M4-01 增 version/commit（08 §1：Directory.Build.props 注入，Settings 关于区展示）。
 using Microsoft.AspNetCore.Builder;
@@ -20,7 +21,7 @@ namespace P2P.Client.Web;
 public static class SystemApi
 {
     public static IEndpointRouteBuilder MapSystemApi(this IEndpointRouteBuilder app,
-        ControlClient control, StateStore store, LocalApiContext ctx,
+        ControlClient control, StateStore store, LocalApiContext ctx, StatusHub hub,
         SubnetConflictDetector? subnetConflicts = null)
     {
         app.MapGet("/api/system/state", () =>
@@ -38,6 +39,8 @@ public static class SystemApi
         app.MapGet("/api/device", () => Api.Ok(new
         {
             deviceId = store.State.DeviceId,
+            // 未改名（含存量升级 state.json 无此字段）回落主机名=注册默认名，仅展示；改名后为持久真值（v1.58）
+            deviceName = store.State.DeviceName ?? Environment.MachineName,
             remoteCode = store.State.RemoteCode,
             virtualIp = store.State.VirtualIp,
             username = ctx.LoginUser,
@@ -54,6 +57,9 @@ public static class SystemApi
                 var ack = await control.SendRequestAsync<DeviceUpdateAck>(seq => new DeviceUpdate(
                     seq, control.TimestampMs(), MsgType.DeviceUpdate, name), ct);
                 if (!ack.Ok) throw new ApiException(ErrorCode.BadRequest, "服务端拒绝改名");
+                store.State.DeviceName = name; // 改名持久化（v1.58：凭据恢复重注册沿用，防洗回 MachineName）
+                await store.SaveAsync(ct);
+                hub.Publish(new { ev = WsEventNames.DeviceList }); // 本机名已变：前端刷新设备视图（TD-16，与 0x14 同模式）
                 return Api.Ok(new { deviceName = name });
             }
             catch (Exception e) { return Api.Fail(e); }

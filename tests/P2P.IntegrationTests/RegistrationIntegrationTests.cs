@@ -119,6 +119,27 @@ public sealed class RegistrationIntegrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task 改名后重注册_沿用持久化设备名_不洗回Hostname()
+    {
+        // v1.58 防洗名回落链（FR-S-107）：state.json 已有改名持久值（PUT /api/device 成功路径等价状态）
+        // 时，凭据恢复等 NeedRegister 态重注册的 0x10 Hostname 沿用该值，而非 MachineName 默认
+        var (client, store, wizard) = NewWizard();
+        await using (client)
+        {
+            store.State.DeviceName = "改名后的设备";
+            await store.SaveAsync();
+            await ReadyAsync(client);
+            var result = await wizard.RegisterAsync($"P2P-IT{Guid.NewGuid():N}"[..15]); // 不带 deviceName
+
+            await using var db = _factory.CreateDbContext();
+            var name = await db.Devices.AsNoTracking()
+                .Where(d => d.Id == result.DeviceId).Select(d => d.DeviceName).SingleAsync();
+            Assert.Equal("改名后的设备", name); // 回落链第二级生效
+            Assert.Equal("改名后的设备", store.State.DeviceName);
+        }
+    }
+
+    [Fact]
     public async Task 已有账号登录绑定_设备归属落库_能力Normal()
     {
         var (client, store, wizard) = NewWizard();

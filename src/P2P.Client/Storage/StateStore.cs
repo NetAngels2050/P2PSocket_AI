@@ -62,6 +62,7 @@ public sealed class StateStore
                 StaticPrivateKey = dto.StaticPrivateKeyBox is null ? null : _protector.Unprotect(Convert.FromBase64String(dto.StaticPrivateKeyBox)),
                 RemoteCode = dto.RemoteCode,
                 VirtualIp = dto.VirtualIp,
+                DeviceName = dto.DeviceName,
                 RememberedUsername = dto.RememberedUsername,
                 RememberedPassword = UnprotectCredential(dto.RememberedPasswordBox),
                 Mappings = dto.Mappings ?? [],
@@ -90,6 +91,7 @@ public sealed class StateStore
                 StaticPrivateKeyBox = State.StaticPrivateKey is null ? null : Convert.ToBase64String(_protector.Protect(State.StaticPrivateKey)),
                 RemoteCode = State.RemoteCode,
                 VirtualIp = State.VirtualIp,
+                DeviceName = State.DeviceName,
                 RememberedUsername = State.RememberedUsername,
                 RememberedPasswordBox = State.RememberedPassword is null ? null
                     : Convert.ToBase64String(_protector.Protect(Encoding.UTF8.GetBytes(State.RememberedPassword))),
@@ -132,6 +134,7 @@ public sealed class StateStore
         public string? StaticPrivateKeyBox { get; set; }
         public string? RemoteCode { get; set; }
         public string? VirtualIp { get; set; }
+        public string? DeviceName { get; set; }
         public string? RememberedUsername { get; set; }
         public string? RememberedPasswordBox { get; set; }
         public List<StoredMapping>? Mappings { get; set; }

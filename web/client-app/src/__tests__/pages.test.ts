@@ -842,6 +842,33 @@ describe("Settings 走查", () => {
     expect(wrapper.find('[data-testid="settings-restart-hint"]').exists()).toBe(true);
   });
 
+  it("设备改名：初值加载 → 改名按钮 → mock 侧本机名更新；同名/空名不可点（v1.58）", async () => {
+    const state = createDefaultState();
+    const { wrapper } = await mountPage(Settings, state, "/settings");
+
+    // 初值 = GET /api/device 的 deviceName（mock 本机行）
+    const input = wrapper.find('[data-testid="device-name-input"]');
+    expect((input.element as HTMLInputElement).value).toBe("本机（web-dev）");
+    // 初值同名 → 改名按钮禁用
+    expect(wrapper.find('[data-testid="device-rename"]').attributes("disabled")).toBeDefined();
+
+    // 改名 → mock 侧 me.deviceName 更新 + 成功提示
+    await input.setValue("新设备名-改名");
+    await flushPromises();
+    await wrapper.find('[data-testid="device-rename"]').trigger("click");
+    await flushPromises();
+    expect(state.devices.find((d) => d.deviceId === state.deviceId)?.deviceName)
+      .toBe("新设备名-改名");
+    expect(
+      [...document.querySelectorAll(".el-message")].some((m) => m.textContent?.includes("设备名已更新")),
+    ).toBe(true);
+
+    // 空名 → 按钮恢复禁用（trim 后 1~64）
+    await input.setValue("   ");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="device-rename"]').attributes("disabled")).toBeDefined();
+  });
+
   it("增删候选地址；空候选集不可保存", async () => {
     const state = createDefaultState();
     state.capability = "normal";

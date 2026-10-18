@@ -99,10 +99,12 @@ public sealed class ClientRegistrationService(
         LastMacCode = macCode;
 
         // 未注册设备首个 Register 不签名（02 §2.2）；staticPubKey 承载 deviceSecret 的 ECIES 下发（OQ-15）
+        // 设备名回落链（v1.58，FR-S-107）：向导输入 → 已改名持久值（凭据恢复重注册不洗名）→ Hostname 默认
+        var name = deviceName ?? store.State.DeviceName ?? _options.Hostname;
         using var keyPair = EcKeyPair.Generate();
         var ack = await client.SendRequestAsync<RegisterAck>(seq => new Register(
             seq, client.TimestampMs(), MsgType.Register,
-            macCode, deviceName ?? _options.Hostname, _options.Os, _options.ClientVersion,
+            macCode, name, _options.Os, _options.ClientVersion,
             keyPair.ExportPublicKey(), null, null, null));
         var deviceSecret = Ecies.Decrypt(keyPair, ack.DeviceSecretBox);
 
@@ -112,6 +114,7 @@ public sealed class ClientRegistrationService(
         store.State.StaticPrivateKey = keyPair.ExportPrivateKey();
         store.State.RemoteCode = ack.RemoteCode;
         store.State.VirtualIp = ack.VirtualIp;
+        store.State.DeviceName = name;
         await store.SaveAsync(ct);
 
         // 会话转已建立（镜像服务端 CompleteRegistration 的密钥派生）

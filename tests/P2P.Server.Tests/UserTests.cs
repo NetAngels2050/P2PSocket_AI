@@ -203,6 +203,30 @@ public sealed class UserTests : IAsyncLifetime
         Assert.Equal("新设备名", device.DeviceName);
     }
 
+    [Fact]
+    public async Task DeviceRename_LengthLimitAndTrim_PersistedAndAudited()
+    {
+        var client = await ConnectRegisteredAsync();
+
+        // 65 字符超上限（v1.58：服务端与客户端 04 §2.1 同口径 1~64，防协议直连绕过）→ Ok=false
+        await client.SendAsync(new DeviceUpdate(client.NextSeq(), client.Now(), MsgType.DeviceUpdate,
+            new string('名', 65)));
+        var tooLong = await client.ReceiveAsync<DeviceUpdateAck>();
+        Assert.NotNull(tooLong);
+        Assert.False(tooLong!.Ok);
+
+        // 合法名 trim 后落库 + 审计 device_rename
+        await client.SendAsync(new DeviceUpdate(client.NextSeq(), client.Now(), MsgType.DeviceUpdate,
+            "  改名测试  "));
+        var ack = await client.ReceiveAsync<DeviceUpdateAck>();
+        Assert.True(ack!.Ok);
+
+        await using var db = CreateDb();
+        var device = await db.Devices.AsNoTracking().SingleAsync(d => d.MacCode.StartsWith("P2P-USER"));
+        Assert.Equal("改名测试", device.DeviceName);
+        Assert.True(await db.WaitAuditAsync(a => a.Event == "device_rename" && a.DeviceId == device.Id));
+    }
+
     // ── 0x20 用户注册（registration_open 开关，FR-S-201）──────────────
 
     [Fact]

@@ -18,8 +18,8 @@
 | 方法 | 路径 | 说明 | 对应需求 |
 |---|---|---|---|
 | GET | `/api/system/state` | 运行状态：`{ phase: unregistered\|wizard\|running\|degraded, serverReachable, protocolVersion }` | FR-C-801 |
-| GET | `/api/device` | 本机：deviceId、remoteCode、virtualIp、登录账号、能力模式（normal/passive） | FR-C-801 |
-| PUT | `/api/device` | `{ deviceName }` 设备改名（0x13） | FR-S-106 |
+| GET | `/api/device` | 本机：deviceId、**deviceName（v1.58；未改名[含存量升级]回落主机名=注册默认名，仅展示）**、remoteCode、virtualIp、登录账号、能力模式（normal/passive） | FR-C-801、FR-S-107 |
+| PUT | `/api/device` | `{ deviceName }` 设备改名（0x13）：trim 后 1~64 字符（越界 1001；passive 本地拒 2002）；成功后 state.json 持久化（凭据恢复重注册沿用，防洗回 hostname 默认值）+ WS device_list 提示（本机设备列表即时刷新） | FR-S-107 |
 | POST | `/api/device/reset-remote-code` | 请求服务端重置远程码，返回新码 | FR-S-903 |
 | GET | `/api/settings` | settings.json 全量 | FR-C-808 |
 | PUT | `/api/settings` | 修改：serverAddrs（域名/主备多候选，FR-C-604）、punchConcurrency(1~5)、webPort 等（校验后即时生效/提示重启） | FR-C-808、OQ-1 |

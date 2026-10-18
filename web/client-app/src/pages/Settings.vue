@@ -2,6 +2,8 @@
 // M1-32 设置页（06 §2、FR-C-808）：serverAddrs（主备多候选、可增删排序）+
 // 打洞并发路数 N（1~5 滑块 + 说明"目标端口 = STUN 端口 + (N−1)"）+ 本地 Web 端口。
 // PUT 部分修改；localWebPort 变更 → restartRequired 提示重启生效（04 §2.1）。
+// v1.58 设备名区（FR-S-107）：1~64 字符独立改名按钮 → PUT /api/device（0x13），
+// 成功直写 system store；设备列表刷新由后端 WS device_list 提示驱动（TD-16）。
 // M3-15 网络诊断卡（05 §7.2）：POST /api/diagnostics/stun-test 触发 RFC5780 子集判型，
 // 结果卡渲染两桶族标签 + 降级提示 + 注记（FR-C-808 诊断面）。
 // M3-16 ping-device（04 §2.6）：远程码→活隧道 PTP PING×4 测 RTT（min/avg/max）；
@@ -26,6 +28,31 @@ const localWebPort = ref(7100);
 const busy = ref(false);
 /** 提交后置位：localWebPort 变更须重启本地服务才生效（监听端口绑定时机） */
 const restartHint = ref(false);
+
+// ── 设备名（v1.58，FR-S-107）──────────────────────────────────────
+// PUT /api/device → 0x13：独立按钮，不与上方配置保存混一个动作；
+// 成功后本机 device_list 提示由后端发（设备列表页即时 refetch），此处直写 store。
+const deviceName = ref("");
+const renameBusy = ref(false);
+const canRename = computed(() => {
+  const name = deviceName.value.trim();
+  return name.length >= 1 && name.length <= 64
+    && name !== (system.device?.deviceName ?? "");
+});
+
+async function renameDevice() {
+  renameBusy.value = true;
+  try {
+    const name = deviceName.value.trim();
+    await api.put(ApiPaths.Device, { deviceName: name });
+    if (system.device) system.device.deviceName = name;
+    ElMessage.success("设备名已更新（设备列表自动刷新）");
+  } catch (e) {
+    ElMessage.error(e instanceof ApiError ? e.message : "改名失败");
+  } finally {
+    renameBusy.value = false;
+  }
+}
 
 const ADDR_PATTERN = /^[\w.-]+:\d{1,5}$/;
 const addrInvalid = computed(() => addrs.value.filter((a) => !ADDR_PATTERN.test(a)));
@@ -80,7 +107,8 @@ onMounted(async () => {
   }
   void refreshPunchQueue(); // 诊断工具区初值（M3-14；失败静默，点刷新重试）
   void refreshTunnels();
-  void system.refresh(); // 关于区兜底拉取（M4-01；App 级 10s 轮询为主）
+  await system.refresh(); // 关于区兜底拉取（M4-01；App 级 10s 轮询为主）
+  deviceName.value = system.device?.deviceName ?? ""; // 改名区初值（v1.58）
 });
 
 // ── 网络诊断（M3-15 stun-test，05 §7.2）────────────────────────────
@@ -214,6 +242,34 @@ async function triggerRekey(t: TunnelView) {
     <h2>设置</h2>
 
     <el-form label-width="140px">
+      <!-- 设备名（v1.58，FR-S-107）：注册后可改；PUT /api/device → 0x13 即时同步 -->
+      <el-form-item label="设备名">
+        <div
+          class="rename-block"
+          data-testid="device-rename-block"
+        >
+          <el-input
+            v-model="deviceName"
+            maxlength="64"
+            :disabled="!system.device?.deviceId"
+            data-testid="device-name-input"
+          />
+          <el-button
+            type="primary"
+            plain
+            :loading="renameBusy"
+            :disabled="!canRename"
+            data-testid="device-rename"
+            @click="renameDevice"
+          >
+            改名
+          </el-button>
+          <div class="hint">
+            1~64 字符；保存后即时同步服务端，同分组/同账号设备的列表自动刷新
+          </div>
+        </div>
+      </el-form-item>
+
       <!-- 服务端地址：主备候选，序即优先级 -->
       <el-form-item label="服务端地址">
         <div
@@ -646,6 +702,9 @@ async function triggerRekey(t: TunnelView) {
 
 <style scoped>
 .addrs { display: grid; gap: 8px; width: 100%; }
+.rename-block { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; width: 100%; }
+.rename-block .el-input { width: 280px; }
+.rename-block .hint { flex-basis: 100%; }
 .addr-row { display: flex; gap: 8px; align-items: center; }
 .addr-row .el-input { width: 280px; }
 .addr-row .el-input.invalid :deep(input) { border-color: var(--el-color-danger); }

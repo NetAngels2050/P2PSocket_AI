@@ -96,7 +96,8 @@ public static class LocalWebApi
     /// <summary>挂载本地 API 全部端点（04 §2.1/2.2/2.3/2.4/2.5/2.6/2.8）。宿主须先 UseWebSockets。</summary>
     public static IEndpointRouteBuilder MapLocalApi(this IEndpointRouteBuilder app, LocalApiServices services)
     {
-        app.MapSystemApi(services.Control, services.State, services.Context, services.SubnetConflicts);
+        app.MapSystemApi(services.Control, services.State, services.Context, services.Hub,
+            services.SubnetConflicts); // v1.58：0x13 改名成功 → WS device_list 提示
         app.MapSettingsApi(services.Control, services.Settings);
         app.MapAuthApi(services.Control, services.Wizard, services.Context);
         app.MapWizardApi(services.Control, services.Wizard, services.State, services.Settings, services.Context);

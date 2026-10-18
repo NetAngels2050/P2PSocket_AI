@@ -22,6 +22,10 @@ public sealed class ClientState
     /// <summary>虚拟 IP（统一下发固定 .2，OQ-13）。</summary>
     public string? VirtualIp { get; set; }
 
+    /// <summary>设备名（v1.58，FR-S-107）：注册时取名，0x13 改名后更新；非机密明文落盘。
+    /// 持久化目的：本机 UI 当前名展示 + 凭据恢复重注册时沿用（防被 Hostname 默认值洗回 MachineName）。</summary>
+    public string? DeviceName { get; set; }
+
     /// <summary>记住的账号（P2 方案 a，2026-10-11 批复）：登录成功记住、登出即忘记。
     /// 用户名非机密（日志/UI 均展示），明文落盘；密码仅驻内存，落盘经 ISecretProtector（07 §4）。</summary>
     public string? RememberedUsername { get; set; }
