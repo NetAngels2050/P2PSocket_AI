@@ -336,6 +336,21 @@ public sealed class ControlSession : IAsyncDisposable
         _hmacEnabled = true;
         _state = SessionState.Established;
         LastSeen = _time.GetLocalNow();
+
+        // 断线重连登录态继承（缺陷批次 2 修 D，02 §2.5 会话级登录的闪断兜底）：同设备旧会话的
+        // OwnerUserId 继承到新会话——登录中闪断重连后可见性/分组管理自动恢复（与客户端凭据
+        // 重放双保险）；登出后旧会话已清 null，新会话默认 null 保持登出语义（不走库恢复：
+        // Device.OwnerUserId 登出保留在库，从库恢复会把登出洗白成已登录）。
+        // Capability 不继承（新会话初始 Normal 口径与客户端镜像一致）；用户已禁用/删除不继承。
+        var previousSession = _registry.TryGet(_deviceId);
+        if (previousSession is not null && !ReferenceEquals(previousSession, this)
+            && previousSession.OwnerUserId is { } inheritedOwner)
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+            if (await db.Users.AsNoTracking()
+                .AnyAsync(u => u.Id == inheritedOwner && !u.Disabled, ct).ConfigureAwait(false))
+                OwnerUserId = inheritedOwner;
+        }
         _registry.Register(this);
         await SendAsync(new ProofAck(NextSeq(), NowMs64, MsgType.Proof, true), ct).ConfigureAwait(false);
     }

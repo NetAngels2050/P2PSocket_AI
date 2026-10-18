@@ -182,6 +182,7 @@ public sealed class ClientRuntime : IAsyncDisposable
             _lanSegments, Path.Combine(_options.BaseDir, "logs"), _subnetConflicts, _stunTester,
             _devicePinger, _host, PeerLabelLookup); // M2-27：白名单镜像 + 日志目录同源；M3-14 诊断区（tunnels/rekey 走本地隧道表）
         _control.ServerPush += OnServerPush; // 0x71 PunchInvite → 被邀请方打洞（02 §5.1③）
+        _control.SessionReestablished += () => _ = OnSessionReestablishedAsync(); // 断线重连沿：登录重放+failed 映射兜底（缺陷批次 2 修 A/C）
         _wizard.LoginSucceeded += username => // P3 修复：登录后可见性就位，补发启用映射恢复
         {   //（即发即忘：不阻塞登录请求；恢复内部逐条容错，可见性未及生效单条失败仅日志）
             _api.Context.LoginUser = username; // P2 方案 a：web/向导/自动重放三路径统一 /api/auth/me 口径
@@ -356,6 +357,64 @@ public sealed class ClientRuntime : IAsyncDisposable
             }
         }
         finally { _restoreMutex.Release(); }
+    }
+
+    /// <summary>重连沿补偿（缺陷批次 2 修 A，P2 方案 a 的重连对等修复）：新会话就绪且非首连——
+    /// 有记住的凭据即重放登录（<see cref="ClientRegistrationService.LoginSucceeded"/> 统一驱动
+    /// LoginUser 口径+映射补恢复，与冷启动同款语义）；凭据被拒（密码已变更/账号不可用）清凭据+
+    /// 清本地登录态；发送异常保留凭据下次重连再试。无凭据而 UI 仍残留登录态（会话级登录已随
+    /// 断线丢失）则如实清除广播，防"客户端显示已登录、服务端实际未登录"失真（TD-16：事件仅
+    /// 提示，真相由前端 refetch /api/auth/me）。</summary>
+    private async Task OnSessionReestablishedAsync()
+    {
+        try
+        {
+            if (_state.State.RememberedUsername is { } rememberedUser
+                && _state.State.RememberedPassword is { } rememberedPassword)
+            {
+                var ack = await _wizard.LoginBindAsync(rememberedUser, rememberedPassword, _cts.Token);
+                if (ack.Ok) Log?.Invoke($"[auth] 重连后已自动重放登录（{rememberedUser}，记住的凭据）");
+                else
+                {
+                    await _wizard.ForgetCredentialsAsync(CancellationToken.None);
+                    Log?.Invoke($"[auth] 重连登录重放被拒（密码已变更或账号不可用），凭据已清除——请手动登录");
+                    ClearUiLoginState();
+                }
+            }
+            else if (_api.Context.LoginUser is not null)
+                ClearUiLoginState(); // 无凭据+UI 残留：服务端新会话实际未登录
+
+            await RetryFailedMappingsAsync("reconnect");
+        }
+        catch (OperationCanceledException) { /* 停机 */ }
+        catch (Exception e)
+        {
+            Log?.Invoke($"[auth] 重连登录重放异常（{e.Message}）：凭据保留，下次重连再试");
+            if (_api.Context.LoginUser is not null) ClearUiLoginState(); // 登录态未知：按未登录显示
+        }
+    }
+
+    /// <summary>清本地 web 登录态并广播 login_state（载荷与 LocalWebApi 能力变迁广播同格式）。</summary>
+    private void ClearUiLoginState()
+    {
+        _api.Context.LoginUser = null;
+        _api.Hub.Publish(new { ev = WsEventNames.LoginState, mode = "passive" });
+    }
+
+    /// <summary>failed 映射兜底（缺陷批次 2 修 C）：断线窗口内的重打常因控制通道未就绪/对端亦在
+    /// 重连（4005）一次判死，而 Failed 态无自动重试。会话重建沿补一轮——引擎 <see
+    /// cref="MappingEngine.RetryAsync"/> 幂等：failed 有监听重入打洞队列、无监听走先拆后建全量
+    /// 重启用、非 failed 态 no-op。置于登录重放之后（同分组可见性不依赖登录，重放失败亦重试）。</summary>
+    private async Task RetryFailedMappingsAsync(string trigger)
+    {
+        var failed = _engine.Snapshots.Where(s => s.State == MappingState.Failed).ToList();
+        if (failed.Count > 0)
+            Log?.Invoke($"[restore] 会话重建沿补试 failed 映射 {failed.Count} 条（{trigger}）");
+        foreach (var snap in failed)
+        {
+            try { await _engine.RetryAsync(snap.Config.MappingId); }
+            catch (Exception e) { Log?.Invoke($"[restore] 映射 {snap.Config.Name} 重连重试失败（{trigger}）：{e.Message}"); }
+        }
     }
 
     /// <summary>真打洞器接线（静态键须已落盘；未注册阶段由占位打洞器兜住，注册完成即接替）。</summary>

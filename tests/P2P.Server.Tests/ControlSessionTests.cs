@@ -278,4 +278,62 @@ public sealed class ControlSessionTests : IAsyncLifetime
         Assert.True(await first.WaitClosedAsync(), "旧会话应被踢线");
         Assert.True(_registry.IsOnline(deviceId), "新会话仍在线");
     }
+
+    // ── 断线重连登录态继承（缺陷批次 2 修 D，02 §2.5 会话级登录的闪断兜底）──
+
+    /// <summary>预置用户，返回 userId。</summary>
+    private Guid SeedUser(bool disabled = false)
+    {
+        var id = Guid.NewGuid();
+        using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(_db.DataSource).Options);
+        db.Users.Add(new User
+        {
+            Id = id,
+            Username = $"u{Guid.NewGuid():N}"[..12],
+            PasswordHash = "stub",
+            Disabled = disabled,
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.SaveChanges();
+        return id;
+    }
+
+    [Fact]
+    public async Task Reconnect_LoggedInPreviousSession_InheritsOwnerUserId()
+    {
+        var (deviceId, secret) = SeedDevice();
+        var userId = SeedUser();
+        var first = await ConnectEstablishedAsync(deviceId, secret);
+        _registry.TryGet(deviceId)!.OwnerUserId = userId; // 模拟 0x21 登录的会话效果（全链路在 UserTests）
+
+        var second = await ConnectEstablishedAsync(deviceId, secret);
+        Assert.True(await first.WaitClosedAsync(), "旧会话应被踢线");
+        Assert.Equal(userId, _registry.TryGet(deviceId)!.OwnerUserId); // 新会话继承登录态
+    }
+
+    [Fact]
+    public async Task Reconnect_LoggedOutPreviousSession_DoesNotInherit()
+    {
+        var (deviceId, secret) = SeedDevice();
+        var first = await ConnectEstablishedAsync(deviceId, secret);
+        _registry.TryGet(deviceId)!.OwnerUserId = null; // 0x22 登出：会话级已清（库 Device.OwnerUserId 保留）
+
+        var second = await ConnectEstablishedAsync(deviceId, secret);
+        Assert.True(await first.WaitClosedAsync(), "旧会话应被踢线");
+        Assert.Null(_registry.TryGet(deviceId)!.OwnerUserId); // 登出语义保持，不被重连洗白
+    }
+
+    [Fact]
+    public async Task Reconnect_DisabledUser_DoesNotInherit()
+    {
+        var (deviceId, secret) = SeedDevice();
+        var userId = SeedUser(disabled: true);
+        var first = await ConnectEstablishedAsync(deviceId, secret);
+        _registry.TryGet(deviceId)!.OwnerUserId = userId; // 继承后用户被禁用的窗口
+
+        var second = await ConnectEstablishedAsync(deviceId, secret);
+        Assert.True(await first.WaitClosedAsync(), "旧会话应被踢线");
+        Assert.Null(_registry.TryGet(deviceId)!.OwnerUserId); // 禁用用户不继承（即时收口，不等 30s 兜底）
+    }
 }

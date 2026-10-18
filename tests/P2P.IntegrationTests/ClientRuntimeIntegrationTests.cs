@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using P2P.Client.Control;
 using P2P.Client.Hosting;
 using P2P.Client.Storage;
 using P2P.Core.Crypto;
@@ -381,6 +382,74 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
             Assert.Equal("disabled", await GetMappingStateAsync(http));
         }
         await runtime3.DisposeAsync();
+    }
+
+    // ── ①d 缺陷批次 2 修 A/C/D：运行中断线重连——凭据重放+登录态保持+failed 映射兜底 ──
+
+    [Fact]
+    public async Task 登录后断线重连_凭据自动重放_登录态保持_failed映射兜底()
+    {
+        var b = await SeedRegisteredWithMappingAsync("rc-b", null);
+        var a = await SeedRegisteredWithMappingAsync("rc-a", b, createSharedGroup: false);
+        var dirA = Path.Combine(_rootDir, "rc-a");
+
+        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var logs = new List<string>();
+        runtime.Log += m => { lock (logs) logs.Add(m); };
+        await runtime.StartAsync();
+        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") })
+        {
+            // 前置与 ①b 同款：未登录恢复受阻 → 建号+对端绑同账号 → 登录 → 补恢复 → failed
+            await WaitLogAsync(logs, "恢复失败（startup）");
+            var username = $"u{Guid.NewGuid():N}"[..12];
+            using (var reg = await http.PostAsync("/api/auth/register", new StringContent(
+                JsonSerializer.Serialize(new { username, password = "secret123" }),
+                System.Text.Encoding.UTF8, "application/json")))
+            {
+                Assert.Equal(0, JsonDocument.Parse(await reg.Content.ReadAsStringAsync())
+                    .RootElement.GetProperty("code").GetInt32());
+            }
+            await using (var db = _factory.CreateDbContext())
+            {
+                db.Devices.Single(d => d.Id == b.DeviceId).OwnerUserId =
+                    db.Users.Single(u => u.Username == username).Id;
+                await db.SaveChangesAsync();
+            }
+            using (var login = await http.PostAsync("/api/auth/login", new StringContent(
+                JsonSerializer.Serialize(new { username, password = "secret123" }),
+                System.Text.Encoding.UTF8, "application/json")))
+            {
+                Assert.Equal(0, JsonDocument.Parse(await login.Content.ReadAsStringAsync())
+                    .RootElement.GetProperty("code").GetInt32());
+            }
+            await WaitStateAsync(http, "failed");
+
+            // 断线注入：同 deviceId 顶替连接（服务端 replaced_by_new_session 踢掉 runtime 会话）
+            var kicker = new ControlClient([$"127.0.0.1:{_port}"],
+                deviceId: a.DeviceId, deviceSecret: a.DeviceSecret);
+            var deadline = Environment.TickCount64 + 5000;
+            while (Environment.TickCount64 < deadline && kicker.State != ControlClientState.Established)
+                await Task.Delay(20);
+            Assert.Equal(ControlClientState.Established, kicker.State);
+            await kicker.DisposeAsync();
+
+            // 重连沿（修 A）：凭据自动重放——web 登录态与服务端会话登录绑定恢复
+            await WaitLogAsync(logs, $"重连后已自动重放登录（{username}");
+            // failed 映射兜底（修 C）：会话重建沿补试一轮
+            await WaitLogAsync(logs, "补试 failed 映射");
+            using (var me = await http.GetAsync("/api/auth/me"))
+            {
+                var meRoot = JsonDocument.Parse(await me.Content.ReadAsStringAsync()).RootElement.GetProperty("data");
+                Assert.Equal(username, meRoot.GetProperty("username").GetString());
+                Assert.Equal("normal", meRoot.GetProperty("mode").GetString());
+            }
+            // 服务端会话登录绑定就位（修 A 重放与修 D 继承殊途同归；修复前重连即丢——此处必 null）
+            deadline = Environment.TickCount64 + 5000;
+            while (Environment.TickCount64 < deadline && _registry.TryGet(a.DeviceId)?.OwnerUserId is null)
+                await Task.Delay(20);
+            Assert.NotNull(_registry.TryGet(a.DeviceId)?.OwnerUserId);
+        }
+        await runtime.DisposeAsync();
     }
 
     // ── ② 未注册向导模式：占位地址 → 向导换址（退避唤醒）→ 注册 → 自动续跑注册后路径 ──

@@ -96,6 +96,11 @@ public sealed class ControlClient : IAsyncDisposable
     /// <summary>能力模式变迁（登录/登出/重连驱动，02 §2.5）。</summary>
     public event Action<CapabilityMode>? CapabilityChanged;
 
+    /// <summary>会话重建（缺陷批次 2 修 A）：非首条连接重回到 Established（断线退避重连/
+    /// 强制重连后新会话就绪）。首条连接与 NeedRegister→注册完成的同连接迁移不触发。
+    /// 宿主据此重放登录（P2 方案 a 的重连对等修复）与 failed 映射兜底。</summary>
+    public event Action? SessionReestablished;
+
     /// <summary>版本拒答取回升级信息（M2-26，FR-C-904）：每轮 5004 拒答均触发
     ///（宿主接 WS upgrade_required 广播与浏览器引导去重）；载荷=0x03 应答原文。</summary>
     public event Action<UpdateInfoResponse>? UpgradeRequired;
@@ -398,7 +403,8 @@ public sealed class ControlClient : IAsyncDisposable
         _hmacEnabled = true;
         SetCapability(CapabilityMode.Normal); // 镜像服务端：新会话初始 Normal（02 §2.5）
         SetState(ControlClientState.Established);
-        Interlocked.Increment(ref _sessionGen); // 新连接就绪（CompleteRegistration 是同连接迁移，不计）
+        if (Interlocked.Increment(ref _sessionGen) > 1) // 新连接就绪（CompleteRegistration 是同连接迁移，不计）
+            SessionReestablished?.Invoke(); // 重连沿：宿主重放登录+failed 映射兜底（首连由注册后路径处理）
     }
 
     /// <summary>版本拒答处理（M2-26，FR-C-904/02 §2.3）：5004 后服务端受理窗内 0x03 是唯一可发消息

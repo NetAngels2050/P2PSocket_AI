@@ -35,7 +35,10 @@ public sealed class ServerOptions
 
     public sealed class HeartbeatSection
     {
-        public int TimeoutSec { get; set; } = 30;
+        // 2026-10-18 缺陷批次 2 修 B：默认 30 与客户端心跳间隔 30s 相等（零冗余）——LastSeen 仅由
+        // 心跳刷新，到达间隔 30s+网络延迟即落入踢线窗，几小时一遇误杀会话→触发重连登录态丢失。
+        // 按 §Validate 建议口径（2.5 倍冗余）默认改 75。
+        public int TimeoutSec { get; set; } = 75;
     }
 
     public sealed class PunchSection
@@ -73,7 +76,7 @@ public sealed class ServerOptions
             errors.Add("database.path 为空；建议：填写相对或绝对 SQLite 文件路径（默认 data/p2p.db）");
 
         if (Heartbeat.TimeoutSec is < 5 or > 3600)
-            errors.Add($"heartbeat.timeoutSec={Heartbeat.TimeoutSec} 超出范围 5~3600；建议：按心跳 30s 的 2.5 倍冗余配置（默认 30）");
+            errors.Add($"heartbeat.timeoutSec={Heartbeat.TimeoutSec} 超出范围 5~3600；建议：按心跳 30s 的 2.5 倍冗余配置（默认 75）");
 
         if (Punch.DefaultConcurrency is < 1 or > 5)
             errors.Add($"punch.defaultConcurrency={Punch.DefaultConcurrency} 超出范围 1~5；建议：对称 NAT 用 3，受限锥形用 1~2（OQ-1 决议）");
