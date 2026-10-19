@@ -7,6 +7,7 @@ import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import type { FormInstance, FormRules } from "element-plus";
 import { CodeText, ApiPaths, ApiError } from "@p2p/ui-shared";
+import { INVITE_CODE_MESSAGE, INVITE_CODE_PATTERN, normalizeInviteCode } from "./inviteCodeRule";
 import { api } from "../api";
 import { useSystemStore } from "../stores/system";
 import { useSettingsStore } from "../stores/settings";
@@ -52,7 +53,8 @@ const addrRules: FormRules = {
 const groupRules: FormRules = {
   inviteCode: [
     { required: true, message: "请输入邀请码", trigger: "blur" },
-    { len: 6, message: "邀请码为 6 位", trigger: "blur" },
+    // 与分组页凭码入组同口径（服务端 InviteCharset 小写去混淆；大写抄写提交归一）
+    { pattern: INVITE_CODE_PATTERN, message: INVITE_CODE_MESSAGE, trigger: "blur" },
   ],
   username: [
     { required: true, message: "请输入用户名", trigger: "blur" },
@@ -104,7 +106,7 @@ async function submit() {
     result.value = await api.post<RegistrationResult>(ApiPaths.WizardRegister, {
       serverAddr: serverAddr.value,
       mode: mode.value,
-      inviteCode: mode.value === "invite" ? inviteCode.value : undefined,
+      inviteCode: mode.value === "invite" ? normalizeInviteCode(inviteCode.value) : undefined,
       username: mode.value === "account" ? username.value : undefined,
       password: mode.value === "account" ? password.value : undefined,
       deviceName: deviceName.value || undefined,

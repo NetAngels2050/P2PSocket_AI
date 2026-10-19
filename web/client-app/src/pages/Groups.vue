@@ -10,6 +10,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import type { FormInstance, FormRules } from "element-plus";
 import { ApiError, CodeText } from "@p2p/ui-shared";
 import PassiveBanner from "../components/PassiveBanner.vue";
+import { INVITE_CODE_MESSAGE, INVITE_CODE_PATTERN, normalizeInviteCode } from "./inviteCodeRule";
 import { useGroupStore, type GroupFormInput } from "../stores/groups";
 import { useDeviceStore } from "../stores/devices";
 import { useSystemStore } from "../stores/system";
@@ -35,7 +36,8 @@ const joinBusy = ref(false);
 const joinRules: FormRules = {
   inviteCode: [
     { required: true, message: "请输入邀请码", trigger: "blur" },
-    { pattern: /^[0-9A-Z]{6}$/, message: "邀请码为 6 位去混淆字符（大写字母数字）", trigger: "blur" },
+    // 服务端生成口径=小写去混淆（InviteCharset）；大写抄写放行、提交归一
+    { pattern: INVITE_CODE_PATTERN, message: INVITE_CODE_MESSAGE, trigger: "blur" },
   ],
 };
 
@@ -48,7 +50,7 @@ async function submitJoin() {
   if (!(await joinRef.value?.validate().catch(() => false))) return;
   joinBusy.value = true;
   try {
-    await groups.join(joinForm.inviteCode.trim());
+    await groups.join(normalizeInviteCode(joinForm.inviteCode));
     ElMessage.success("已加入分组");
     joinVisible.value = false;
   } catch (e) {

@@ -628,8 +628,9 @@ export function createHandlers(state: MockState = createDefaultState()) {
     http.get("*/api/groups/:id/invite", ({ params }) => {
       const g = state.groups.find((x) => x.groupId === params.id);
       if (!g || !g.isOwner) return fail(1001, "not_group_owner");
+      // 与服务端 GroupService.InviteCharset 同口径（小写去混淆，03 §3）
       g.inviteCode = Array.from({ length: 6 }, () =>
-        "23456789ABCDEFGHJKMNPQRSTUVWXYZ"[Math.floor(Math.random() * 31)]).join("");
+        "23456789abcdefghjkmnpqrstuvwxyz"[Math.floor(Math.random() * 31)]).join("");
       return ok({ inviteCode: g.inviteCode });
     }),
     http.delete("*/api/groups/:id/invite", ({ params }) => {

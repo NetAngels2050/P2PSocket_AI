@@ -454,8 +454,8 @@ describe("Groups 全量走查（M2-28）", () => {
 
   it("凭码入组：approval 组 3002 → 待审批提示 + 申请入队；free 组即时入组", async () => {
     const state = normalState();
-    state.groups[0].inviteCode = "XY9876"; // 默认分组（free）
-    state.groups[1].inviteCode = "AB2345"; // 项目协作组（approval）
+    state.groups[0].inviteCode = "xy9876"; // 默认分组（free；小写=服务端 InviteCharset 口径）
+    state.groups[1].inviteCode = "ab2345"; // 项目协作组（approval）
     const { wrapper } = await mountPage(Groups, state, "/groups");
 
     await wrapper.find('[data-testid="groups-join"]').trigger("click");
@@ -464,7 +464,7 @@ describe("Groups 全量走查（M2-28）", () => {
     const input = dialog.querySelector("input[data-testid=groups-join-code]") as HTMLInputElement;
 
     // approval 组：3002 原码透传 → 前端按"待审批"提示（非错误）
-    input.value = "AB2345";
+    input.value = "ab2345";
     input.dispatchEvent(new Event("input"));
     await flushPromises();
     (dialog.querySelector('[data-testid="groups-join-save"]') as HTMLElement).click();
@@ -475,7 +475,8 @@ describe("Groups 全量走查（M2-28）", () => {
     // mock 侧申请入队（演示态与真实 0x51 建单同构）
     expect(wrapper.findAll('[data-testid="groups-requests"] .el-table__row').length).toBe(2);
 
-    // free 组：即时入组（memberCount 3→4）
+    // free 组：即时入组（memberCount 3→4）。输入大写抄写——校验放行（i 标志）、
+    // 提交归一小写后匹配 mock 存码（服务端 BINARY 比较大小写敏感，归一是必须路径）
     await wrapper.find('[data-testid="groups-join"]').trigger("click");
     await flushPromises();
     const dialog2 = document.querySelector('[data-testid="groups-join-dialog"]')!;
@@ -515,7 +516,7 @@ describe("Groups 全量走查（M2-28）", () => {
     await wrapper.find('[data-testid="groups-invite"]').trigger("click");
     await flushPromises();
     const dialog = document.querySelector('[data-testid="groups-invite-dialog"]')!;
-    expect(dialog.querySelector('[data-testid="groups-invite-code"]')?.textContent ?? "").toMatch(/[0-9A-Z]{6}/);
+    expect(dialog.querySelector('[data-testid="groups-invite-code"]')?.textContent ?? "").toMatch(/[2-9a-hjkmnp-z]{6}/);
     (dialog.querySelector('[data-testid="groups-invite-revoke"]') as HTMLElement).click();
     await flushPromises();
     expect(document.querySelector('[data-testid="groups-invite-code"]')).toBeNull();

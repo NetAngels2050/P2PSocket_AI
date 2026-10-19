@@ -5,6 +5,7 @@
 //   （与服务端 NormalizeCidr 同口径：CIDR 或裸 IP→补 /32、/128）。
 import { describe, expect, it } from "vitest";
 import { isValidIp, makeMappingRules, mappingFormRules, REMOTE_CODE_PATTERN, validatePort } from "../pages/mappingFormRules";
+import { INVITE_CODE_PATTERN, normalizeInviteCode } from "../pages/inviteCodeRule";
 import { normalizeCidrPreview, segmentsFormRules } from "../pages/segmentsRules";
 
 function runPortRule(value: number): string | null {
@@ -53,6 +54,29 @@ describe("远程码校验（04 §2.5：6 位）", () => {
     for (const code of ["A1B2C3", "a1b2c", "a1b2c3d", "a1b2c%", ""]) {
       expect(REMOTE_CODE_PATTERN.test(code)).toBe(false);
     }
+  });
+});
+
+describe("邀请码校验（服务端 InviteCharset 同口径：2-9 + 小写去 o/i/l，03 §3）", () => {
+  it("合法：6 位字符集内（数字 2-9 + 小写字母去 o/i/l）", () => {
+    for (const code of ["ab2345", "xy9876", "kmnpqz", "234567", "zzzzz2"])
+      expect(INVITE_CODE_PATTERN.test(code)).toBe(true);
+  });
+
+  it("大写抄写放行（提交前 normalizeInviteCode 归一）", () => {
+    for (const code of ["AB2345", "XY9876"])
+      expect(INVITE_CODE_PATTERN.test(code)).toBe(true);
+  });
+
+  it("非法：混淆字符 0/1/o/i/l（含大写 O/I/L）、短/长/特殊字符/空", () => {
+    for (const code of ["0b2345", "1b2345", "ob2345", "ib2345", "lb2345", "OB2345", "IL2345",
+      "ab234", "ab23456", "ab 234", "ab234%", ""])
+      expect(INVITE_CODE_PATTERN.test(code)).toBe(false);
+  });
+
+  it("normalizeInviteCode：去空白 + 转小写（服务端大小写敏感精确匹配）", () => {
+    expect(normalizeInviteCode("  XY9876 ")).toBe("xy9876");
+    expect(normalizeInviteCode("ab2345")).toBe("ab2345");
   });
 });
 
