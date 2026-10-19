@@ -1,14 +1,15 @@
 <script setup lang="ts">
-// M2-28 分组全量页（06 §2、FR-C-805，替换 M1-33 占位）：已加入列表（策略/成员数/角色）+
+// M2-28 分组全量页（06 §2、FR-C-805，替换 M1-33 占位）：已加入列表（策略/成员数[所有者行附待审计数]/角色）+
 // 凭码入组（0x51；approval 组 3002 → 待审批提示）+ 新建（准入策略单选，0x50）+
-// 所有者操作：审批队列（0x53 Approve/Reject）、邀请码（0x54 覆盖式/撤销）、
+// 所有者操作：审批弹窗（0x53 List + 批量 Approve/Reject，10/页分页——2026-10-19 用户需求，
+// 取代原顶部聚合审批卡）、邀请码（0x54 覆盖式/撤销）、
 // 成员管理（0x57 移出——成员取自可见设备同组过滤，0x40 维度）、编辑（0x55）、解散（0x56）；
 // 成员自退（0x52）。分组族全属主动类——passive 置灰 + 横幅（05 §8）。
 // 成员资格变更 → WS device_list → devices refetch（TD-16；服务端 0x41 推送链 M2-10）。
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { FormInstance, FormRules } from "element-plus";
-import { ApiError, CodeText } from "@p2p/ui-shared";
+import { ApiError, CodeText, type GroupRequestView } from "@p2p/ui-shared";
 import PassiveBanner from "../components/PassiveBanner.vue";
 import { INVITE_CODE_MESSAGE, INVITE_CODE_PATTERN, normalizeInviteCode } from "./inviteCodeRule";
 import { useGroupStore, type GroupFormInput } from "../stores/groups";
@@ -225,35 +226,65 @@ async function dissolve(id: string, name: string) {
   }
 }
 
-// ── 审批（0x53 Approve/Reject，仅所有者）────────────────────────
-const decideBusy = ref("");
+// ── 审批（0x53 List + 批量 Approve/Reject，仅所有者；FR-S-305 客户端载体）──
+// 待审数据源=GET /api/groups 聚合 requests（自有组 0x53 List），成员数列同时按组计待审。
+const approveVisible = ref(false);
+const approve = reactive({ groupId: "", groupName: "", page: 1 });
+const approveSelection = ref<GroupRequestView[]>([]);
+const approveBusy = ref(false);
+const ApprovePageSize = 10;
 
-async function approve(requestId: string) {
-  decideBusy.value = requestId;
-  try {
-    await groups.approve(requestId);
-    ElMessage.success("已批准入组");
-  } catch (e) {
-    ElMessage.error(e instanceof ApiError ? e.message : "请求失败");
-  } finally {
-    decideBusy.value = "";
-  }
+const approveItems = computed(() => groups.requests.filter((r) => r.groupId === approve.groupId));
+const approvePaged = computed(() =>
+  approveItems.value.slice((approve.page - 1) * ApprovePageSize, approve.page * ApprovePageSize));
+
+function pendingOf(groupId: string): number {
+  return groups.requests.filter((r) => r.groupId === groupId).length;
 }
 
-async function reject(requestId: string) {
-  decideBusy.value = requestId;
-  try {
-    await groups.reject(requestId);
-    ElMessage.info("已拒绝");
-  } catch (e) {
-    ElMessage.error(e instanceof ApiError ? e.message : "请求失败");
-  } finally {
-    decideBusy.value = "";
-  }
+function openApprove(id: string) {
+  const g = groups.items.find((x) => x.groupId === id);
+  if (!g) return;
+  approve.groupId = id;
+  approve.groupName = g.groupName;
+  approve.page = 1;
+  approveSelection.value = [];
+  approveVisible.value = true;
 }
 
-const groupNameOf = (groupId: string) =>
-  groups.items.find((g) => g.groupId === groupId)?.groupName ?? groupId;
+function onSelectionChange(rows: GroupRequestView[]) {
+  approveSelection.value = rows;
+}
+
+/** 翻页清空勾选（勾选仅当页有效——分页切片换数据，旧勾选行不再渲染）。 */
+function onApprovePageChange() {
+  approveSelection.value = [];
+}
+
+/** 批量决议：逐条 0x53 Approve/Reject（每条独立 Ack；单条失败不中断后续），store 逐条刷新聚合。 */
+async function decideBatch(approveThem: boolean) {
+  if (approveSelection.value.length === 0 || approveBusy.value) return;
+  approveBusy.value = true;
+  let okCount = 0;
+  let failCount = 0;
+  for (const r of approveSelection.value) {
+    try {
+      await (approveThem ? groups.approve(r.requestId) : groups.reject(r.requestId));
+      okCount++;
+    } catch {
+      failCount++; // 已被处理/网络失败：如实计数，继续后续条目
+    }
+  }
+  approveBusy.value = false;
+  approveSelection.value = [];
+  approve.page = 1;
+  if (okCount > 0)
+    ElMessage.success(
+      `${approveThem ? "已批准" : "已拒绝"} ${okCount} 条${failCount > 0 ? `（${failCount} 条失败）` : ""}`);
+  else
+    ElMessage.error(`操作失败 ${failCount} 条`);
+  if (pendingOf(approve.groupId) === 0) approveVisible.value = false; // 该组待审清空→关弹窗
+}
 
 function fmtTime(ms: number): string {
   return new Date(ms).toLocaleString();
@@ -320,10 +351,14 @@ onMounted(() => {
         </template>
       </el-table-column>
       <el-table-column
-        prop="memberCount"
         label="成员数"
-        width="90"
-      />
+        width="140"
+      >
+        <template #default="{ row }">
+          <!-- 所有者行附本组待审计数（聚合 requests 按组计）；非所有者仅成员数 -->
+          {{ row.memberCount }}{{ row.isOwner ? `（待审：${pendingOf(row.groupId)}）` : "" }}
+        </template>
+      </el-table-column>
       <el-table-column
         label="我的角色"
         width="100"
@@ -339,11 +374,19 @@ onMounted(() => {
       </el-table-column>
       <el-table-column
         label="操作"
-        width="300"
+        width="350"
         fixed="right"
       >
         <template #default="{ row }">
           <template v-if="row.isOwner">
+            <el-button
+              size="small"
+              :disabled="isPassive"
+              data-testid="groups-approve-entry"
+              @click="openApprove(row.groupId)"
+            >
+              审批
+            </el-button>
             <el-button
               size="small"
               :disabled="isPassive"
@@ -393,71 +436,6 @@ onMounted(() => {
         </template>
       </el-table-column>
     </el-table>
-
-    <!-- 审批队列（所有者侧聚合，FR-S-305） -->
-    <el-card
-      v-if="groups.requests.length > 0"
-      class="requests"
-      data-testid="groups-requests-card"
-    >
-      <template #header>
-        待审批申请（{{ groups.requests.length }}）
-      </template>
-      <el-table
-        :data="groups.requests"
-        data-testid="groups-requests"
-        size="small"
-      >
-        <el-table-column
-          prop="deviceName"
-          label="申请设备"
-          min-width="140"
-        />
-        <el-table-column
-          label="申请分组"
-          min-width="140"
-        >
-          <template #default="{ row }">
-            {{ groupNameOf(row.groupId) }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          label="申请时间"
-          width="170"
-        >
-          <template #default="{ row }">
-            {{ fmtTime(row.createdAtMs) }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          label="操作"
-          width="140"
-        >
-          <template #default="{ row }">
-            <el-button
-              size="small"
-              type="success"
-              plain
-              :disabled="isPassive || decideBusy !== ''"
-              data-testid="groups-approve"
-              @click="approve(row.requestId)"
-            >
-              批准
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              :disabled="isPassive || decideBusy !== ''"
-              data-testid="groups-reject"
-              @click="reject(row.requestId)"
-            >
-              拒绝
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
 
     <!-- 凭码入组 -->
     <el-dialog
@@ -640,6 +618,77 @@ onMounted(() => {
       />
     </el-dialog>
 
+    <!-- 审批（所有者；0x53 List + 批量 Approve/Reject，10/页） -->
+    <el-dialog
+      v-model="approveVisible"
+      :title="`审批 · ${approve.groupName}`"
+      width="560px"
+      data-testid="groups-approve-dialog"
+    >
+      <template v-if="approveItems.length > 0">
+        <el-table
+          :data="approvePaged"
+          size="small"
+          data-testid="groups-approve-list"
+          @selection-change="onSelectionChange"
+        >
+          <el-table-column
+            type="selection"
+            width="42"
+          />
+          <el-table-column
+            prop="deviceName"
+            label="申请设备"
+            min-width="150"
+          />
+          <el-table-column
+            label="申请时间"
+            width="180"
+          >
+            <template #default="{ row }">
+              {{ fmtTime(row.createdAtMs) }}
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="pager">
+          <el-pagination
+            v-model:current-page="approve.page"
+            layout="total, prev, pager, next"
+            :total="approveItems.length"
+            :page-size="ApprovePageSize"
+            data-testid="groups-approve-pager"
+            @current-change="onApprovePageChange"
+          />
+        </div>
+        <div class="row">
+          <el-button
+            type="success"
+            :disabled="approveSelection.length === 0 || approveBusy"
+            :loading="approveBusy"
+            data-testid="groups-batch-approve"
+            @click="decideBatch(true)"
+          >
+            批量同意（{{ approveSelection.length }}）
+          </el-button>
+          <el-button
+            type="danger"
+            plain
+            :disabled="approveSelection.length === 0 || approveBusy"
+            :loading="approveBusy"
+            data-testid="groups-batch-reject"
+            @click="decideBatch(false)"
+          >
+            批量拒绝（{{ approveSelection.length }}）
+          </el-button>
+        </div>
+      </template>
+      <el-empty
+        v-else
+        description="暂无待审批申请"
+        :image-size="60"
+      />
+    </el-dialog>
+
     <!-- 成员管理（所有者；成员=可见设备同组过滤） -->
     <el-dialog
       v-model="membersVisible"
@@ -695,9 +744,9 @@ onMounted(() => {
 <style scoped>
 .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .toolbar h2 { margin: 0; font-size: 16px; }
-.requests { margin-top: 16px; }
 .muted { color: var(--el-text-color-secondary); font-size: 12px; }
 .row { display: flex; gap: 8px; margin-top: 8px; }
+.pager { display: flex; justify-content: flex-end; margin-top: 8px; }
 .dot {
   display: inline-block;
   width: 8px;

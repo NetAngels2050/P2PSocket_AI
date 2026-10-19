@@ -424,7 +424,16 @@ describe("Groups 全量走查（M2-28）", () => {
     (hit.querySelector(".el-message-box__btns .el-button--primary") as HTMLElement).click();
   }
 
-  it("已加入列表（策略/成员数/角色）+ 审批队列聚合；批准 → 成员数+1 且队列清空", async () => {
+  /** 勾选审批弹窗表格指定行（选择列原生 checkbox 在 happy-dom 点击不触发 change——教训⑲ 同族，走组件 API）。 */
+  function checkApproveRow(wrapper: VueWrapper, index: number) {
+    const table = wrapper.findAllComponents({ name: "ElTable" })
+      .find((t) => (t.element as HTMLElement).getAttribute("data-testid") === "groups-approve-list")!;
+    const row = (table.props("data") as { requestId: string }[])[index]!;
+    (table.vm as { toggleRowSelection: (row: unknown, selected?: boolean) => void })
+      .toggleRowSelection(row, true);
+  }
+
+  it("已加入列表（策略/成员数[所有者附待审]/角色）+ 审批弹窗：勾选→批量同意 → 待审清零", async () => {
     const { wrapper } = await mountPage(Groups, normalState(), "/groups");
 
     const table = wrapper.find('[data-testid="groups-table"]');
@@ -434,22 +443,94 @@ describe("Groups 全量走查（M2-28）", () => {
     expect(table.text()).toContain("需审批");
     expect(table.text()).toContain("所有者");
     expect(table.text()).toContain("成员");
-    // 仅所有者行有操作组按钮；成员行为退组
+    // 仅所有者行有操作组按钮；成员行为退组；审批入口仅所有者行
     expect(wrapper.findAll('[data-testid="groups-dissolve"]').length).toBe(1);
     expect(wrapper.findAll('[data-testid="groups-leave"]').length).toBe(1);
+    expect(wrapper.findAll('[data-testid="groups-approve-entry"]').length).toBe(1);
 
-    // 审批队列（所有者侧聚合）：申请设备 + 归属分组名
-    const requests = wrapper.find('[data-testid="groups-requests"]');
-    expect(requests.text()).toContain("家里 NAS");
-    expect(requests.text()).toContain("项目协作组");
-
-    // 批准 → memberCount 2→3、申请出队（卡片隐藏）
-    await wrapper.find('[data-testid="groups-approve"]').trigger("click");
-    await flushPromises();
-    expect(wrapper.find('[data-testid="groups-requests-card"]').exists()).toBe(false);
+    // 成员数列：非所有者行仅成员数；所有者行附待审计数（mock 种子 2 成员+1 待审）
     const rows = wrapper.findAll('[data-testid="groups-table"] .el-table__row');
-    expect(rows[1].text()).toContain("项目协作组");
-    expect(rows[1].text()).toContain("3");
+    expect(rows[0].text()).toContain("3");
+    expect(rows[0].text()).not.toContain("待审");
+    expect(rows[1].text()).toContain("2（待审：1）");
+
+    // 审批弹窗：申请设备 + 批量按钮无勾选时禁用
+    await wrapper.find('[data-testid="groups-approve-entry"]').trigger("click");
+    await flushPromises();
+    const dialog = document.querySelector('[data-testid="groups-approve-dialog"]')!;
+    expect(dialog.querySelector('[data-testid="groups-approve-list"]')!.textContent).toContain("家里 NAS");
+    const batchOk = dialog.querySelector('[data-testid="groups-batch-approve"]') as HTMLButtonElement;
+    expect(batchOk.className).toContain("is-disabled");
+
+    // 勾选首行 → 批量同意 → 成员数 2→3、待审清零、弹窗空态（待审清零自动关闭，再开即空）
+    checkApproveRow(wrapper, 0);
+    await flushPromises();
+    expect(batchOk.className).not.toContain("is-disabled");
+    batchOk.click();
+    await flushPromises();
+    const rows2 = wrapper.findAll('[data-testid="groups-table"] .el-table__row');
+    expect(rows2[1].text()).toContain("3（待审：0）");
+    await wrapper.find('[data-testid="groups-approve-entry"]').trigger("click");
+    await flushPromises();
+    expect(document.querySelector('[data-testid="groups-approve-dialog"]')?.textContent).toContain("暂无待审批申请");
+  });
+
+  it("审批弹窗：批量拒绝 → 成员数不变、待审递减、弹窗保持", async () => {
+    const state = normalState();
+    state.joinRequests.push({
+      requestId: "r-55555555-5555-4555-8555-555555555555",
+      groupId: "g-22222222-2222-4222-8222-222222222222",
+      deviceId: "55555555-5555-4555-8555-555555555555",
+      deviceName: "测试机 B",
+      createdAtMs: Date.UTC(2026, 8, 29, 9, 0, 0),
+    });
+    const { wrapper } = await mountPage(Groups, state, "/groups");
+    expect(wrapper.findAll('[data-testid="groups-table"] .el-table__row')[1]!.text()).toContain("2（待审：2）");
+
+    await wrapper.find('[data-testid="groups-approve-entry"]').trigger("click");
+    await flushPromises();
+    checkApproveRow(wrapper, 0);
+    await flushPromises();
+    (document.querySelector('[data-testid="groups-batch-reject"]') as HTMLButtonElement).click();
+    await flushPromises();
+
+    // 拒绝不加成员：memberCount 2 不变；待审 2→1；组内仍有待审 → 弹窗内容递减保持打开
+    expect(wrapper.findAll('[data-testid="groups-table"] .el-table__row')[1]!.text()).toContain("2（待审：1）");
+    expect(document.querySelector('[data-testid="groups-approve-list"]')!.textContent).not.toContain("家里 NAS");
+    expect(document.querySelectorAll('[data-testid="groups-approve-list"] .el-table__row').length).toBe(1);
+  });
+
+  it("审批弹窗分页：12 条待审 10/页两页，翻页清勾选", async () => {
+    const state = normalState();
+    for (let i = 2; i <= 12; i++)
+      state.joinRequests.push({
+        requestId: `r-0000000${i}-0000-4000-8000-00000000000${i}`,
+        groupId: "g-22222222-2222-4222-8222-222222222222",
+        deviceId: `0000000${i}-0000-4000-8000-00000000000${i}`,
+        deviceName: `批量设备 ${String(i).padStart(2, "0")}`,
+        createdAtMs: Date.UTC(2026, 8, 28, 10, i, 0),
+      });
+    const { wrapper } = await mountPage(Groups, state, "/groups");
+    expect(wrapper.findAll('[data-testid="groups-table"] .el-table__row')[1]!.text()).toContain("（待审：12）");
+
+    await wrapper.find('[data-testid="groups-approve-entry"]').trigger("click");
+    await flushPromises();
+    const dialog = document.querySelector('[data-testid="groups-approve-dialog"]')!;
+    // 第 1 页 10 行 + 分页总数
+    expect(dialog.querySelectorAll('[data-testid="groups-approve-list"] .el-table__row').length).toBe(10);
+    expect(dialog.querySelector('[data-testid="groups-approve-pager"]')!.textContent).toContain("12");
+
+    // 翻到第 2 页：余 2 行；第 1 页勾选不跨页保留（批量按钮回禁用）
+    checkApproveRow(wrapper, 0);
+    await flushPromises();
+    const page2 = [...dialog.querySelectorAll(".el-pager li")].find(
+      (li) => li.textContent === "2",
+    ) as HTMLElement;
+    page2.click();
+    await flushPromises();
+    expect(dialog.querySelectorAll('[data-testid="groups-approve-list"] .el-table__row').length).toBe(2);
+    const batchOk = dialog.querySelector('[data-testid="groups-batch-approve"]') as HTMLButtonElement;
+    expect(batchOk.className).toContain("is-disabled");
   });
 
   it("凭码入组：approval 组 3002 → 待审批提示 + 申请入队；free 组即时入组", async () => {
@@ -472,8 +553,8 @@ describe("Groups 全量走查（M2-28）", () => {
     expect(
       [...document.querySelectorAll(".el-message")].some((m) => m.textContent?.includes("等待所有者")),
     ).toBe(true);
-    // mock 侧申请入队（演示态与真实 0x51 建单同构）
-    expect(wrapper.findAll('[data-testid="groups-requests"] .el-table__row').length).toBe(2);
+    // mock 侧申请入队（演示态与真实 0x51 建单同构）→ 所有者行待审计数 1→2
+    expect(wrapper.findAll('[data-testid="groups-table"] .el-table__row')[1]!.text()).toContain("（待审：2）");
 
     // free 组：即时入组（memberCount 3→4）。输入大写抄写——校验放行（i 标志）、
     // 提交归一小写后匹配 mock 存码（服务端 BINARY 比较大小写敏感，归一是必须路径）

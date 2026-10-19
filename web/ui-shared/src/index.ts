@@ -22,6 +22,8 @@ export type {
   MappingTrafficView,
   RegistrationResult,
   GroupInfo,
+  GroupView,
+  GroupRequestView,
   ClientSettings,
   ReconnectSettings,
   MappingState,
