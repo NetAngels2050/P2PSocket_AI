@@ -1,7 +1,7 @@
 # P2P 内网穿透产品 · 技术设计文档
 
-> 版本：v1.60　创建日期：2026-08-19　状态：待评审
-> 依据：[产品需求文档 PRD v0.8](../prd/README.md)（决策 D1~D21，D3 经 v0.4 修订；开放问题 OQ-1~OQ-19 已全部决议）
+> 版本：v1.61　创建日期：2026-08-19　状态：待评审
+> 依据：[产品需求文档 PRD v0.9](../prd/README.md)（决策 D1~D21，D3 经 v0.4 修订；开放问题 OQ-1~OQ-19 已全部决议）
 > 定位：开发阶段的**施工图纸**——所有实现以本文档为准；与 PRD 冲突时以 PRD 为准并提出修订。
 
 ## 文档索引
@@ -136,3 +136,4 @@
 | 2026-10-19 | v1.58 | **设备改名闭环（FR-S-107，PRD v0.7 新增条目）**：0x13 协议与库表能力 v1.3 已备，本次补全客户端 UI/本地持久化/即时推送三缺口。02 §2.4 0x13 行补服务端口径（trim 后 1~64 与客户端同口径防协议直连绕过、越界 Ack ok=false、成功审计 device_rename+0x41 推送同账号∪共同分组、发起端除外）；04 §2.1 GET /api/device 响应补 deviceName、PUT 补持久化与 WS 提示语义（需求列 FR-S-106→FR-S-107 校正）；05 §5 增 v1.58 实现注记（服务端校验/审计/推送帧序 + 客户端 state.json 补 deviceName 字段与**注册回落链防洗名**——macCode 覆盖式恢复会以 0x10 hostname 覆盖库中名，回落链=向导输入→已存持久值→MachineName）；06 §2 /settings 行补设备名区+落地注记（独立改名按钮不与配置保存混、system store 镜像补字段、mock 同步、管理页保持只读=需求批复）；PRD 03 新增 FR-S-107 + README v0.7；用户手册 §6.4 补改名操作 |
 | 2026-10-19 | v1.59 | **分组所有者审批交互闭环（FR-C-805，PRD v0.8）**：06 §2 /groups 行重写审批面——原顶部聚合审批卡（全组混列、逐条操作）改为**组级审批弹窗**：所有者行「成员数」列附本组待审批数（`2（待审：3）` 格式，非所有者行不显示）、操作栏「审批」按钮开弹窗（待审列表[申请设备/时间]、勾选多选、10/页分页、批量同意/拒绝[/api/group-requests/{id}/approve|reject 逐条循环]、翻页清勾选、待审清零自动关闭）；协议/端点零变更（0x53 与本地 API 既有，数据源=GET /api/groups 聚合 requests）；附带修复 ui-shared index.ts 类型导出滞后（GroupView/GroupRequestView 生成物未 re-export，致 client-app vue-tsc 6 条存量错——TS2305 直发 3 条+store 类型退化连锁 TS7006，29→23）；PRD 04 FR-C-805 + README v0.8；用户手册 §5.2 同步 v1.3 |
 | 2026-10-20 | v1.60 | **Web 易用性/美观性优化批次 A+B+C 落地**（评估报告批复，处置台账=docs/问题清单/2026-10-20-客户端Web易用性美观性评估.md §6；协议/端点/API 零变更）：06 §1 工程树勘误（ui-shared 并无 RateChart/ConfirmInput——RateChart 实为 client-app 手写 SVG 非 ECharts，删除虚列；styles/ 入树）+新增 §1.1 共享样式层与视觉规范（shared.css 子路径导出、.toolbar/.muted/.error/.dot/.code-pill 上收约定、离线色定案灰=正常态/红=异常、label-width 三档 72/88/140、favicon、深色/响应式暂缓）+v1.60 落地注记（状态词统一"直连"、client /login 全屏居中+菜单"账号登录"、登出/停用二次确认、detail 8 枚举中文映射与文案去内嵌码、图标体系 @element-plus/icons-vue、echarts 死依赖移除、状态点 aria-label）；06 §2 /login 行同步；开发规范 01 依赖白名单删 echarts 加 icons-vue；用户手册 v1.4 多处同步 |
+| 2026-10-20 | v1.61 | **双模式 UI（简易版/高级版）+引导式新建映射落地（FR-C-810/811，PRD v0.9；用户批复四决策——批次 A+B+C 后"仍不尽人意"按使用门槛分叉；协议/端点零变更，纯前端交互重组）**：06 §2 路由表重排——`/` 重定向 /simple 为**默认入口**、新增 SimpleLayout（顶栏三 tab+960px 居中+provide("simpleAlert") 断连告警注入）与三子路由行（概览/映射卡列表/分组行列表）、仪表盘挪 /dashboard（MENU 同步）、AdminLayout header 插槽「简易版」回切（零改 ui-shared）；v1.61 落地注记（监控集/操作范围批复口径、mappings.create 改回新映射 id 供「完成并启用」两连调[POST 响应=完整 MappingView 含 mappingId 双端兼容]、overview 补 relay 计数、mappingDetail.ts/测试基架 harness.ts 双上收、向导四步交互[设备下拉「设备名（远程码）」可搜索+离线禁选+快捷端口+本地端口/名称联动预填+enable 失败不回滚]、两条走查教训[手动直挂布局致 RouterView 缺 viewDepth 重复渲染→挂载根须纯 RouterView；el-dialog 关闭 DOM 常驻→display:none 判可见性]）；06 §1 工程树补 layouts/SimpleLayout+pages/simple；PRD 04 FR-C-810/811 + README v0.9；用户手册 v1.5（§0.2 双模式+§1.5 简易版三页与引导式新建+§2/§4 高级版定位） |
