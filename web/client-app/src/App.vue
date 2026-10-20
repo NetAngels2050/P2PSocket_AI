@@ -5,7 +5,10 @@
 // M2-28：设备 10s 轮询移除（device_list 事件驱动 + onOpen/visibility resync 兜底，TD-16）；
 // mapping_state invalid 旁路 → 全局失效提示（0x75 链，列表置灰由 refetch 完成）。
 // M3-13：顶部网段冲突持续告警条（FR-C-204：subnet_conflict 事件 → system refetch 驱动显隐）。
-import { onMounted, onUnmounted, computed, watch } from "vue";
+// FR-C-810 双模式（2026-10-20）：默认入口 /simple（SimpleLayout 自带顶栏 tab，不经
+// AdminLayout）；WS 接线/守卫/初始 refresh 留 App 级对两模式同权生效；断连告警经
+// provide("simpleAlert") 传简易版顶栏。
+import { onMounted, onUnmounted, computed, provide, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { Odometer, Search, Share, Connection, Link, Document, User, Setting, Upload } from "@element-plus/icons-vue";
@@ -16,9 +19,10 @@ import { useMappingStore } from "./stores/mappings";
 import { useDeviceStore } from "./stores/devices";
 import SubnetConflictBanner from "./components/SubnetConflictBanner.vue";
 
-// 2026-10-20 评估批次 A/C：登录入口"账号"→"账号登录"（U-6）；菜单配图标（V-4）
+// 2026-10-20 评估批次 A/C：登录入口"账号"→"账号登录"（U-6）；菜单配图标（V-4）；
+// 仪表盘随双模式挪 /dashboard（原 / 由 /simple 接管默认入口）
 const MENU = [
-  { path: "/", label: "仪表盘", icon: Odometer },
+  { path: "/dashboard", label: "仪表盘", icon: Odometer },
   { path: "/devices", label: "设备发现", icon: Search },
   { path: "/groups", label: "分组", icon: Share },
   { path: "/segments", label: "网段", icon: Connection },
@@ -65,6 +69,11 @@ const headerText = computed(() =>
 // 已登录的账号管理（/login）仍嵌布局
 const bare = computed(() => route.path === "/login" && !auth.me?.username);
 
+// 简易版（FR-C-810）：/simple* 免 AdminLayout 渲染（SimpleLayout 内含子 RouterView）；
+// 断连告警经 provide 传简易版顶栏（ref 直传保持响应式）
+const simpleMode = computed(() => route.path.startsWith("/simple"));
+provide("simpleAlert", alert);
+
 // 守卫（单向）：一旦检出未注册一律去向导；反向（注册完成回主界面）由向导页
 // 自主处置——结果展示（远程码/虚拟 IP）须先呈现，用户点"进入控制台"再离开（06 §2）
 watch(
@@ -88,7 +97,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <RouterView v-if="bare" />
+  <RouterView v-if="bare || simpleMode" />
   <AdminLayout
     v-else
     title="P2P 客户端"
@@ -97,6 +106,12 @@ onUnmounted(() => {
   >
     <template #header>
       <span class="auth-state">{{ headerText }}</span>
+      <RouterLink
+        to="/simple"
+        class="simple-link"
+      >
+        简易版
+      </RouterLink>
     </template>
     <SubnetConflictBanner />
     <RouterView />
@@ -107,5 +122,15 @@ onUnmounted(() => {
 .auth-state {
   font-size: 13px;
   color: var(--el-text-color-secondary);
+  margin-right: 12px;
 }
+.simple-link {
+  font-size: 13px;
+  color: var(--el-color-primary);
+  text-decoration: none;
+  border: 1px solid var(--el-color-primary-light-5);
+  border-radius: var(--el-border-radius-base);
+  padding: 2px 10px;
+}
+.simple-link:hover { background: var(--el-color-primary-light-9); }
 </style>

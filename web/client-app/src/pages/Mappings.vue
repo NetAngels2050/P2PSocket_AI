@@ -14,6 +14,7 @@ import { useMappingStore, type MappingFormInput } from "../stores/mappings";
 import { useDeviceStore } from "../stores/devices";
 import { useSystemStore } from "../stores/system";
 import { makeMappingRules } from "./mappingFormRules";
+import { detailText, humanRate, pathText } from "./mappingDetail";
 
 const mappings = useMappingStore();
 const system = useSystemStore();
@@ -43,41 +44,7 @@ const rules = makeMappingRules(() => form.targetMode === "ip");
 const targetDevice = computed(() =>
   devices.items.find((d) => d.remoteCode === form.targetRemoteCode.trim()));
 
-function humanRate(n: number): string {
-  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MiB/s`;
-  if (n >= 1024) return `${(n / 1024).toFixed(1)} KiB/s`;
-  return `${n} B/s`;
-}
-
-/** 路径列中文化（2026-10-20 评估 U-2）：direct/relay → 直连/中继（与状态标签同词），
-    无速率数据时回落按状态推断。 */
-function pathText(id: string, state: string): string {
-  const p = mappings.rates.get(id)?.path;
-  if (p === "direct" || (!p && state === "direct")) return "直连";
-  if (p === "relay") return "中继";
-  return "—";
-}
-
-// 失败详情中文化（2026-10-20 评估 U-3）：detail 原文形如 "head" / "head: 附注"（客户端侧
-// 枚举，Puncher/MappingEngine 落账），多失败以"；"串联——头映射中文、附注保留原文供排障对照。
-const DETAIL_TEXT: Record<string, string> = {
-  punch_timeout: "打洞超时",
-  punch_error: "打洞出错",
-  punch_failed: "打洞失败",
-  proto_not_supported: "协议不支持",
-  stun_failed: "STUN 探测失败",
-  listen_failed: "本地监听失败",
-  l3_not_permitted: "目标地址不在对端开放网段",
-  relay_failed: "中继回退失败",
-};
-
-function detailText(detail: string): string {
-  const zh = (s: string) => DETAIL_TEXT[s.trim()] ?? s;
-  const parts = detail.split(": ");
-  if (parts.length === 1) return zh(parts[0]);
-  const heads = parts.slice(0, -1).map((p) => p.split("；").map(zh).join("；"));
-  return [...heads, parts[parts.length - 1]].join("：");
-}
+// humanRate/pathText/detailText 上收 pages/mappingDetail.ts（简易版/高级版共用，FR-C-810）
 
 function rate(id: string) {
   return mappings.rates.get(id);
@@ -268,7 +235,7 @@ onMounted(() => {
         width="80"
       >
         <template #default="{ row }">
-          {{ pathText(row.mappingId, row.state) }}
+          {{ pathText(mappings.rates.get(row.mappingId)?.path, row.state) }}
         </template>
       </el-table-column>
       <el-table-column

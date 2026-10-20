@@ -35,6 +35,7 @@ export const useMappingStore = defineStore("mappings", () => {
     return {
       total: items.value.length,
       direct: count("direct"),
+      relay: count("relay"), // 简易版概览计数（FR-C-810）；高级版仪表盘未用不增列
       punching: count("punching"),
       failed: count("failed"),
       disabled: count("disabled"),
@@ -63,8 +64,9 @@ export const useMappingStore = defineStore("mappings", () => {
     rates.set(ev.id, { rateUp: ev.rateUp, rateDown: ev.rateDown, path: ev.path });
   }
 
-  async function create(input: MappingFormInput) {
-    await api.post(ApiPaths.Mappings, {
+  /** 创建（04 §2.5）：回新映射 id——简易版引导流「完成并启用」随后 enable（FR-C-811）。 */
+  async function create(input: MappingFormInput): Promise<string> {
+    const r = await api.post<{ mappingId: string }>(ApiPaths.Mappings, {
       name: input.name,
       localPort: input.localPort,
       proto: input.proto,
@@ -73,6 +75,7 @@ export const useMappingStore = defineStore("mappings", () => {
       targetPort: input.targetPort,
     });
     await refresh();
+    return r.mappingId;
   }
 
   async function update(input: MappingFormInput) {

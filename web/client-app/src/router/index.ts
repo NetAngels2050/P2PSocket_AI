@@ -1,9 +1,22 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-router";
 
 // 路由表（06 §2）：六页面 M1-32 落地；/groups 全量替换占位 + /segments M2-28；
-// /logs /upgrade M2-29（FR-C-807/904）。routes 独立导出——测试构建隔离路由实例复用同表。
+// /logs /upgrade M2-29（FR-C-807/904）。
+// FR-C-810 双模式（2026-10-20）：默认入口 / → /simple（简易版顶部 tab 三页），
+// 高级版十页原样可达——仪表盘挪 /dashboard（MENU 同步），其余路径不变。
+// routes 独立导出——测试构建隔离路由实例复用同表。
 export const routes: RouteRecordRaw[] = [
-  { path: "/", component: () => import("../pages/Dashboard.vue") },
+  { path: "/", redirect: "/simple" },
+  {
+    path: "/simple",
+    component: () => import("../layouts/SimpleLayout.vue"),
+    children: [
+      { path: "", component: () => import("../pages/simple/Overview.vue") },
+      { path: "mappings", component: () => import("../pages/simple/SimpleMappings.vue") },
+      { path: "groups", component: () => import("../pages/simple/SimpleGroups.vue") },
+    ],
+  },
+  { path: "/dashboard", component: () => import("../pages/Dashboard.vue") },
   { path: "/wizard", component: () => import("../pages/Wizard.vue") },
   { path: "/login", component: () => import("../pages/Login.vue") },
   { path: "/devices", component: () => import("../pages/Devices.vue") },
