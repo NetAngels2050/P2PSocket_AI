@@ -1,9 +1,13 @@
 <script setup lang="ts">
 // M1-31 AdminLayout（06 §1）：侧边栏菜单 + 顶栏 + 主区插槽。
 // 菜单项走 RouterLink（宿主 app 注册路由与激活态）；顶栏右侧插槽放全局态（登录态/服务不可达条）。
+import type { Component } from "vue";
+
 export interface LayoutMenuItem {
   path: string;
   label: string;
+  /** 侧边栏图标（可选，@element-plus/icons-vue 组件由宿主 app 传入——2026-10-20 评估批次 C）。 */
+  icon?: Component;
 }
 
 defineProps<{
@@ -27,7 +31,13 @@ defineProps<{
           :to="item.path"
           class="menu-item"
         >
-          {{ item.label }}
+          <el-icon
+            v-if="item.icon"
+            class="menu-icon"
+          >
+            <component :is="item.icon" />
+          </el-icon>
+          <span>{{ item.label }}</span>
         </RouterLink>
       </nav>
     </aside>
@@ -74,6 +84,8 @@ defineProps<{
   text-decoration: none;
   font-size: 14px;
 }
+.menu-item { display: flex; align-items: center; }
+.menu-icon { margin-right: 8px; font-size: 16px; }
 .menu-item:hover { background: var(--el-fill-color-light); }
 .menu-item.router-link-active { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }

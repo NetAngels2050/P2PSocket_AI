@@ -169,7 +169,7 @@ describe("仪表盘走查", () => {
 
     const mappings = wrapper.find('[data-testid="dash-mappings"]');
     expect(mappings.text()).toContain("4 / 5"); // enabled / total
-    for (const s of ["直达：2", "中继：1", "失败：1", "失效：0", "未知：0"]) {
+    for (const s of ["直连：2", "中继：1", "失败：1", "失效：0", "未知：0"]) {
       expect(mappings.text()).toContain(s); // TD-22 byStatus 五态
     }
 
@@ -184,7 +184,7 @@ describe("仪表盘走查", () => {
 
     const punch = wrapper.find('[data-testid="dash-punch"]');
     expect(punch.text()).toContain("90.0%");
-    expect(punch.text()).toContain("40 次：直达 30 · 中继 6 · 失败 4");
+    expect(punch.text()).toContain("40 次：直连 30 · 中继 6 · 失败 4");
 
     // 折线：hourly 首桶空 → 单段两点（数据变换细节由纯函数用例覆盖）
     const chart = wrapper.find('[data-testid="punch-chart"]');

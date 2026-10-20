@@ -4,18 +4,20 @@
 // （401 由 api.ts 拦截器清标记跳登录——守卫在下次导航生效，拦截器即时生效）。
 import { computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { Odometer, User, Monitor, Share, Link, Switch, Setting } from "@element-plus/icons-vue";
 import { AdminLayout } from "@p2p/ui-shared";
 import { useAuthStore } from "./stores/auth";
 import { useDashboardStore } from "./stores/dashboard";
 
+// 菜单图标（2026-10-20 评估批次 C，与 client-app 同体系）
 const MENU = [
-  { path: "/dashboard", label: "仪表盘" },
-  { path: "/users", label: "用户" },
-  { path: "/devices", label: "设备" },
-  { path: "/groups", label: "分组" },
-  { path: "/mappings", label: "映射" },
-  { path: "/relay", label: "中继" },
-  { path: "/system", label: "系统" },
+  { path: "/dashboard", label: "仪表盘", icon: Odometer },
+  { path: "/users", label: "用户", icon: User },
+  { path: "/devices", label: "设备", icon: Monitor },
+  { path: "/groups", label: "分组", icon: Share },
+  { path: "/mappings", label: "映射", icon: Link },
+  { path: "/relay", label: "中继", icon: Switch },
+  { path: "/system", label: "系统", icon: Setting },
 ];
 
 const auth = useAuthStore();

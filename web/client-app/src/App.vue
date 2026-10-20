@@ -8,6 +8,7 @@
 import { onMounted, onUnmounted, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
+import { Odometer, Search, Share, Connection, Link, Document, User, Setting, Upload } from "@element-plus/icons-vue";
 import { AdminLayout, useWs, ApiPaths } from "@p2p/ui-shared";
 import { useSystemStore } from "./stores/system";
 import { useAuthStore } from "./stores/auth";
@@ -15,16 +16,17 @@ import { useMappingStore } from "./stores/mappings";
 import { useDeviceStore } from "./stores/devices";
 import SubnetConflictBanner from "./components/SubnetConflictBanner.vue";
 
+// 2026-10-20 评估批次 A/C：登录入口"账号"→"账号登录"（U-6）；菜单配图标（V-4）
 const MENU = [
-  { path: "/", label: "仪表盘" },
-  { path: "/devices", label: "设备发现" },
-  { path: "/groups", label: "分组" },
-  { path: "/segments", label: "网段" },
-  { path: "/mappings", label: "端口映射" },
-  { path: "/logs", label: "日志" },
-  { path: "/login", label: "账号" },
-  { path: "/settings", label: "设置" },
-  { path: "/upgrade", label: "升级" },
+  { path: "/", label: "仪表盘", icon: Odometer },
+  { path: "/devices", label: "设备发现", icon: Search },
+  { path: "/groups", label: "分组", icon: Share },
+  { path: "/segments", label: "网段", icon: Connection },
+  { path: "/mappings", label: "端口映射", icon: Link },
+  { path: "/logs", label: "日志", icon: Document },
+  { path: "/login", label: "账号登录", icon: User },
+  { path: "/settings", label: "设置", icon: Setting },
+  { path: "/upgrade", label: "升级", icon: Upload },
 ];
 
 const system = useSystemStore();
@@ -59,6 +61,10 @@ const headerText = computed(() =>
     : "未登录",
 );
 
+// 未登录访问 /login → 免布局渲染（2026-10-20 评估 V-7：全屏居中登录页，沿 server-app bare 模式）；
+// 已登录的账号管理（/login）仍嵌布局
+const bare = computed(() => route.path === "/login" && !auth.me?.username);
+
 // 守卫（单向）：一旦检出未注册一律去向导；反向（注册完成回主界面）由向导页
 // 自主处置——结果展示（远程码/虚拟 IP）须先呈现，用户点"进入控制台"再离开（06 §2）
 watch(
@@ -82,7 +88,9 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <RouterView v-if="bare" />
   <AdminLayout
+    v-else
     title="P2P 客户端"
     :menu="MENU"
     :alert="alert"

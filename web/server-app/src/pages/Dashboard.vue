@@ -21,7 +21,7 @@ function fmtUptime(sec: number): string {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  direct: "直达",
+  direct: "直连", // 2026-10-20 评估 U-2：全站统一直连（原"直达"）
   relay: "中继",
   failed: "失败",
   invalid: "失效",
@@ -110,7 +110,7 @@ onUnmounted(() => dashboard.stopPolling());
           {{ rateText }}
         </p>
         <p class="sub-line">
-          {{ data.punch.total24h }} 次：直达 {{ data.punch.direct24h }} · 中继 {{ data.punch.relay24h }} · 失败 {{ data.punch.failed24h }}
+          {{ data.punch.total24h }} 次：直连 {{ data.punch.direct24h }} · 中继 {{ data.punch.relay24h }} · 失败 {{ data.punch.failed24h }}
         </p>
       </el-card>
     </div>

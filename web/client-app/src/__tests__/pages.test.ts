@@ -58,6 +58,21 @@ async function mountPage(
   return { wrapper, router, pinia };
 }
 
+/** 定位当前 ElMessageBox（按标题/正文文本过滤，取末位最新窗——旧窗关闭动画期可能仍在 DOM）
+ * 并点确认/取消按钮。2026-10-20 批次 A 新增确认弹窗（登出/停用）后多测试共用。 */
+async function clickMessageBox(titleMark: string, button: "confirm" | "cancel") {
+  const matched = () =>
+    [...document.querySelectorAll(".el-message-box")]
+      .filter((b) => b.textContent?.includes(titleMark));
+  await vi.waitFor(() => expect(matched().length).toBeGreaterThan(0));
+  const box = matched().pop() as HTMLElement;
+  const sel = button === "confirm"
+    ? ".el-message-box__btns .el-button--primary"
+    : ".el-message-box__btns .el-button:not(.el-button--primary)";
+  (box.querySelector(sel) as HTMLElement).click();
+  await flushPromises();
+}
+
 // ── 仪表盘 ─────────────────────────────────────────────────────────
 
 describe("Dashboard 走查", () => {
@@ -71,7 +86,7 @@ describe("Dashboard 走查", () => {
     expect(info.text()).toContain("未登录（哑节点）");
 
     const overview = wrapper.find('[data-testid="dash-overview"]');
-    expect(overview.text()).toContain("直达");
+    expect(overview.text()).toContain("直连");
     expect(overview.text()).toContain("失败");
     expect(overview.text()).toContain("已禁用");
     expect(overview.text()).toContain("共 3 条映射");
@@ -227,9 +242,13 @@ describe("Login 走查", () => {
     expect(wrapper.find('[data-testid="login-username"]').text()).toContain("new-user");
     expect(wrapper.find('[data-testid="login-logout"]').exists()).toBe(true);
 
-    // 登出 → 回表单
+    // 登出带二次确认（2026-10-20 批次 A U-1）：取消留在已登录态，确认后回表单
     await wrapper.find('[data-testid="login-logout"]').trigger("click");
-    await flushPromises();
+    await clickMessageBox("登出确认", "cancel");
+    expect(wrapper.find('[data-testid="login-username"]').exists()).toBe(true);
+
+    await wrapper.find('[data-testid="login-logout"]').trigger("click");
+    await clickMessageBox("登出确认", "confirm");
     expect(wrapper.find('[data-testid="login-form"]').exists()).toBe(true);
   });
 
@@ -340,18 +359,15 @@ describe("Mappings 走查", () => {
     state.capability = "normal";
     const { wrapper } = await mountPage(Mappings, state, "/mappings");
 
-    // 停用 direct 行（第一行 enabled=true）
+    // 停用 direct 行（第一行 enabled=true）——停用侧二次确认（2026-10-20 批次 A U-7）
     await wrapper.find('[data-testid="mapping-disable"]').trigger("click");
-    await flushPromises();
+    await clickMessageBox("停用确认", "confirm");
     const tags = wrapper.findAll('[data-testid="mapping-state"]');
     expect(tags[0].attributes("data-state")).toBe("disabled");
 
     // 删除（ElMessageBox confirm → 确认按钮）
     await wrapper.find('[data-testid="mapping-delete"]').trigger("click");
-    await flushPromises();
-    const confirm = document.querySelector(".el-message-box__btns .el-button--primary");
-    (confirm as HTMLElement).click();
-    await flushPromises();
+    await clickMessageBox("删除确认", "confirm");
     expect(wrapper.findAll('[data-testid="mapping-state"]').length).toBe(2);
   });
 });

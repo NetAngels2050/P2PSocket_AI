@@ -82,7 +82,9 @@ onMounted(() => void devices.refresh());
         <template #default="{ row }">
           <span
             class="dot"
-            :class="row.online ? 'on' : 'off'"
+            :class="{ on: row.online }"
+            role="img"
+            :aria-label="row.online ? '在线' : '离线'"
           />
           {{ row.deviceName }}
         </template>
@@ -128,7 +130,7 @@ onMounted(() => void devices.refresh());
           <code
             v-for="s in row.lanSegments"
             :key="s"
-            class="seg"
+            class="code-pill"
           >{{ s }}</code>
         </template>
       </el-table-column>
@@ -173,26 +175,8 @@ onMounted(() => void devices.refresh());
 </template>
 
 <style scoped>
-.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.toolbar h2 { margin: 0; font-size: 16px; }
+/* .toolbar / .dot / .muted / .code-pill（原 .seg）上收 ui-shared/styles/shared.css
+   （2026-10-20 评估批次 B：离线色统一灰） */
 .group-filter { width: 180px; }
-.dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-right: 6px;
-}
-.dot.on { background: var(--el-color-success); }
-.dot.off { background: var(--el-text-color-disabled); }
 .tag { margin-right: 4px; }
-.seg {
-  display: inline-block;
-  margin-right: 6px;
-  font-size: 12px;
-  background: var(--el-fill-color-light);
-  border-radius: var(--el-border-radius-base);
-  padding: 0 6px;
-}
-.muted { color: var(--el-text-color-secondary); font-size: 13px; }
 </style>

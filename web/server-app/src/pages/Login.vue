@@ -228,5 +228,5 @@ onMounted(() => {
 }
 .auth { width: 400px; }
 .must-change { margin-bottom: 12px; }
-.error { color: var(--el-color-danger); font-size: 13px; }
+/* .error 上收 ui-shared/styles/shared.css（2026-10-20 评估批次 B） */
 </style>

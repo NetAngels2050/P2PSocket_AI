@@ -491,7 +491,7 @@ async function triggerRekey(t: TunnelView) {
           placeholder="目标设备远程码（6 位）"
           class="ping-code"
           data-testid="ping-code"
-          :maxlength="8"
+          :maxlength="6"
         />
         <el-button
           type="primary"

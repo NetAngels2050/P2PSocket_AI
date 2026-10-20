@@ -3,7 +3,7 @@
 // M2-29 修改密码（0x23）：已登录态弹窗改密，成功后主动登出引导重新登录（清单 M2-29 UX 口径；
 // 协议侧 0x23 成功不裁会话——04 §2.3）；passive 会话登录 → 本地拒发 2002（02 §2.5）。
 import { computed, onMounted, reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import type { FormInstance, FormRules } from "element-plus";
 import { ApiError, ApiPaths } from "@p2p/ui-shared";
 import { api } from "../api";
@@ -51,9 +51,23 @@ async function submit() {
   }
 }
 
+// 登出二次确认（2026-10-20 评估 U-1）：误触即转哑节点（写操作全停），后果文案页内已有现成
+const logoutBusy = ref(false);
+
 async function logout() {
-  await auth.logout().catch(() => undefined);
-  void system.refresh(); // capability → passive
+  const ok = await ElMessageBox.confirm(
+    "登出后本机转为哑节点：仅响应既有隧道，不能主动发起映射。确定登出？",
+    "登出确认",
+    { type: "warning", confirmButtonText: "登出", cancelButtonText: "取消" },
+  ).then(() => true).catch(() => false);
+  if (!ok) return;
+  logoutBusy.value = true;
+  try {
+    await auth.logout().catch(() => undefined);
+    void system.refresh(); // capability → passive
+  } finally {
+    logoutBusy.value = false;
+  }
 }
 
 // ── 修改密码（0x23，M2-29）───────────────────────────────────────
@@ -61,6 +75,8 @@ const changeVisible = ref(false);
 const changeRef = ref<FormInstance>();
 const changeForm = reactive({ oldPassword: "", newPassword: "", confirm: "" });
 const changeBusy = ref(false);
+// 改密错误内联呈现（2026-10-20 评估 U-5：错误呈现统一策略——表单提交错误内联，不再 toast）
+const changeError = ref("");
 const changeRules: FormRules = {
   oldPassword: [{ required: true, message: "请输入当前密码", trigger: "blur" }],
   newPassword: [
@@ -78,12 +94,14 @@ const changeRules: FormRules = {
 
 function openChange() {
   Object.assign(changeForm, { oldPassword: "", newPassword: "", confirm: "" });
+  changeError.value = "";
   changeVisible.value = true;
 }
 
 async function submitChange() {
   if (!(await changeRef.value?.validate().catch(() => false))) return;
   changeBusy.value = true;
+  changeError.value = "";
   try {
     await api.post(ApiPaths.AuthChangePassword, {
       oldPassword: changeForm.oldPassword,
@@ -94,8 +112,9 @@ async function submitChange() {
     await auth.logout(); // 引导重新登录（清单 M2-29）；0x23 协议侧不裁会话
     void system.refresh();
   } catch (e) {
-    if (e instanceof ApiError && e.code === 2001) ElMessage.error("当前密码不正确");
-    else ElMessage.error(e instanceof ApiError ? e.message : "请求失败");
+    changeError.value = e instanceof ApiError && e.code === 2001
+      ? "当前密码不正确"
+      : e instanceof ApiError ? e.message : "请求失败";
   } finally {
     changeBusy.value = false;
   }
@@ -105,7 +124,9 @@ onMounted(() => void auth.refresh());
 </script>
 
 <template>
-  <section class="login-page">
+  <!-- 未登录态全屏居中（2026-10-20 评估 V-7：与 server-app 登录页形态统一；
+       App.vue bare 模式免布局渲染本页），已登录账号管理仍嵌布局窄卡 -->
+  <section :class="loggedIn ? 'login-page' : 'login-screen'">
     <el-card
       v-if="loggedIn"
       class="profile"
@@ -124,12 +145,13 @@ onMounted(() => void auth.refresh());
         </el-tag>
       </p>
       <p class="muted">
-        登出后本机转为哑节点：仅响应既有隧道，不能主动发起映射（FR-C-603 不重启）
+        登出后本机转为哑节点：仅响应既有隧道，不能主动发起映射
       </p>
       <div class="row">
         <el-button
           type="danger"
           plain
+          :loading="logoutBusy"
           data-testid="login-logout"
           @click="logout"
         >
@@ -167,7 +189,7 @@ onMounted(() => void auth.refresh());
         class="passive-hint"
         data-testid="login-passive-hint"
       >
-        当前为哑节点会话：登录须重建控制通道——请等待自动重连或重启客户端后重试（02 §2.5）
+        当前为哑节点会话：登录须重建控制通道——请等待自动重连或重启客户端后重试
       </p>
       <el-form
         ref="formRef"
@@ -271,13 +293,27 @@ onMounted(() => void auth.refresh());
           </el-button>
         </el-form-item>
       </el-form>
+      <p
+        v-if="changeError"
+        class="error"
+        data-testid="login-change-error"
+      >
+        {{ changeError }}
+      </p>
     </el-dialog>
   </section>
 </template>
 
 <style scoped>
 .login-page { max-width: 480px; }
-.muted { color: var(--el-text-color-secondary); font-size: 13px; }
+.login-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--el-fill-color-lighter);
+}
+.login-screen .auth { width: 420px; }
 .row { display: flex; gap: 12px; }
 .passive-hint {
   font-size: 13px;
@@ -286,5 +322,5 @@ onMounted(() => void auth.refresh());
   border-radius: var(--el-border-radius-base);
   padding: 8px;
 }
-.error { color: var(--el-color-danger); font-size: 13px; }
+/* .muted / .error 上收 ui-shared/styles/shared.css（2026-10-20 评估批次 B） */
 </style>

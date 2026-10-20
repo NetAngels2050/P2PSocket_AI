@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import { createPinia } from "pinia";
 import ElementPlus from "element-plus";
 import "element-plus/dist/index.css";
+import "@p2p/ui-shared/styles.css"; // 共享样式层（2026-10-20 评估批次 B：.toolbar/.muted/.error/.dot/.code-pill）
 import App from "./App.vue";
 import { router } from "./router";
 

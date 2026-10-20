@@ -215,10 +215,7 @@ onMounted(() => void loadAll());
 .request-row:last-child {
   border-bottom: none;
 }
-.muted {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-}
+/* .muted 上收 ui-shared/styles/shared.css（2026-10-20 评估批次 B） */
 .hint {
   margin-left: 12px;
   font-size: 13px;

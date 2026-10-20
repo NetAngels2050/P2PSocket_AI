@@ -11,7 +11,7 @@ const mappings = useMappingsStore();
 const devices = useDevicesStore();
 
 const STATUS_LABELS: Record<string, string> = {
-  direct: "直达",
+  direct: "直连", // 2026-10-20 评估 U-2：全站统一直连（原"直达"）
   relay: "中继",
   failed: "失败",
   invalid: "失效",

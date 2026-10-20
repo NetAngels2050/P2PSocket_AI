@@ -49,6 +49,36 @@ function humanRate(n: number): string {
   return `${n} B/s`;
 }
 
+/** 路径列中文化（2026-10-20 评估 U-2）：direct/relay → 直连/中继（与状态标签同词），
+    无速率数据时回落按状态推断。 */
+function pathText(id: string, state: string): string {
+  const p = mappings.rates.get(id)?.path;
+  if (p === "direct" || (!p && state === "direct")) return "直连";
+  if (p === "relay") return "中继";
+  return "—";
+}
+
+// 失败详情中文化（2026-10-20 评估 U-3）：detail 原文形如 "head" / "head: 附注"（客户端侧
+// 枚举，Puncher/MappingEngine 落账），多失败以"；"串联——头映射中文、附注保留原文供排障对照。
+const DETAIL_TEXT: Record<string, string> = {
+  punch_timeout: "打洞超时",
+  punch_error: "打洞出错",
+  punch_failed: "打洞失败",
+  proto_not_supported: "协议不支持",
+  stun_failed: "STUN 探测失败",
+  listen_failed: "本地监听失败",
+  l3_not_permitted: "目标地址不在对端开放网段",
+  relay_failed: "中继回退失败",
+};
+
+function detailText(detail: string): string {
+  const zh = (s: string) => DETAIL_TEXT[s.trim()] ?? s;
+  const parts = detail.split(": ");
+  if (parts.length === 1) return zh(parts[0]);
+  const heads = parts.slice(0, -1).map((p) => p.split("；").map(zh).join("；"));
+  return [...heads, parts[parts.length - 1]].join("：");
+}
+
 function rate(id: string) {
   return mappings.rates.get(id);
 }
@@ -102,7 +132,17 @@ async function save() {
   }
 }
 
-async function toggle(id: string, enabled: boolean) {
+// 停用侧二次确认（2026-10-20 评估 U-7：误触即断流量；启用侧恢复性操作免确认）
+async function toggle(id: string, name: string, enabled: boolean) {
+  if (!enabled) {
+    try {
+      await ElMessageBox.confirm(`停用映射"${name}"将立即中断其流量，确定停用？`, "停用确认", {
+        type: "warning",
+      });
+    } catch {
+      return; // 用户取消
+    }
+  }
   try {
     if (enabled) await mappings.enable(id);
     else await mappings.disable(id);
@@ -198,7 +238,7 @@ onMounted(() => {
           />
           <el-tooltip
             v-if="row.detail"
-            :content="row.detail"
+            :content="detailText(row.detail)"
             placement="top"
           >
             <span class="detail-mark">?</span>
@@ -228,7 +268,7 @@ onMounted(() => {
         width="80"
       >
         <template #default="{ row }">
-          {{ rate(row.mappingId)?.path ?? (row.state === "direct" ? "direct" : "—") }}
+          {{ pathText(row.mappingId, row.state) }}
         </template>
       </el-table-column>
       <el-table-column
@@ -244,7 +284,7 @@ onMounted(() => {
             plain
             :disabled="isPassive"
             data-testid="mapping-enable"
-            @click="toggle(row.mappingId, true)"
+            @click="toggle(row.mappingId, row.name, true)"
           >
             启用
           </el-button>
@@ -255,7 +295,7 @@ onMounted(() => {
             plain
             :disabled="isPassive"
             data-testid="mapping-disable"
-            @click="toggle(row.mappingId, false)"
+            @click="toggle(row.mappingId, row.name, false)"
           >
             停用
           </el-button>
@@ -303,7 +343,7 @@ onMounted(() => {
         ref="formRef"
         :model="form"
         :rules="rules"
-        label-width="92px"
+        label-width="88px"
       >
         <el-form-item
           label="名称"
@@ -378,7 +418,7 @@ onMounted(() => {
           >
             对端「{{ targetDevice.deviceName }}」开放网段：{{
               targetDevice.lanSegments.length ? targetDevice.lanSegments.join("、") : "无（仅 self 放行）"
-            }}——段外地址将被拒绝（4002）
+            }}——段外地址将被拒绝
           </p>
         </el-form-item>
         <el-form-item
@@ -393,7 +433,7 @@ onMounted(() => {
           />
         </el-form-item>
         <p class="muted">
-          停用态才可改本地端口/协议（与服务端 1003 规则同口径）；创建后默认停用，启用即开始打洞
+          停用态才可改本地端口/协议；创建后默认停用，启用即开始打洞
         </p>
         <el-form-item>
           <el-button
@@ -414,10 +454,8 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.toolbar h2 { margin: 0; font-size: 16px; }
+/* .toolbar / .muted 上收 ui-shared/styles/shared.css（2026-10-20 评估批次 B） */
 .rate { font-size: 13px; white-space: nowrap; }
-.muted { color: var(--el-text-color-secondary); font-size: 12px; }
 .seg-hint { margin: 6px 0 0; width: 100%; }
 .detail-mark {
   display: inline-block;

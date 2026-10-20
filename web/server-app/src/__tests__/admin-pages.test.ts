@@ -327,7 +327,7 @@ describe("映射页走查", () => {
     expect(wrapper.find('[data-testid="mapping-bytes-网站"]').text()).toContain("1.0 MiB");
     expect(wrapper.find('[data-testid="mapping-bytes-网站"]').text()).toContain("2.0 MiB");
     const stats = wrapper.find('[data-testid="mappings-status-stats"]').text();
-    expect(stats).toContain("直达 1");
+    expect(stats).toContain("直连 1");
     expect(stats).toContain("中继 1");
     expect(stats).toContain("未知 1");
     expect(table.text()).toContain("A 机（712152）"); // 归属设备（远程码）

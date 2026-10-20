@@ -1,5 +1,6 @@
 // M1-31 组件测试（06 §1）：StatusTag 状态映射 / CodeText 复制 / DeviceCard 字段 /
 // AdminLayout 布局与菜单（RouterLink 以替身挂载）。
+import { h } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, RouterLinkStub } from "@vue/test-utils";
 import AdminLayout from "../layouts/AdminLayout.vue";
@@ -13,7 +14,7 @@ describe("StatusTag（映射状态机 02 §4.5）", () => {
   it.each([
     ["disabled", "已禁用", "info"],
     ["punching", "打洞中", "warning"],
-    ["direct", "直达", "success"],
+    ["direct", "直连", "success"],
     ["relay", "中继", "primary"],
     ["failed", "失败", "danger"],
   ])("状态 %s → 文案/样式", (state, text, kind) => {
@@ -63,7 +64,9 @@ describe("DeviceCard", () => {
     const w = mount(DeviceCard, { props: { device } });
     expect(w.find(".name").text()).toBe("办公室主机");
     expect(w.find(".group").text()).toBe("默认分组");
-    expect(w.find(".dot").attributes("data-online")).toBe("true");
+    // 在线点 class 化 + aria-label（2026-10-20 评估 U-9/V-3；样式上收 shared.css）
+    expect(w.find(".dot").classes()).toContain("on");
+    expect(w.find(".dot").attributes("aria-label")).toBe("在线");
     expect(w.text()).toContain("0a1b2c");
     expect(w.element).toMatchSnapshot();
   });
@@ -73,7 +76,8 @@ describe("DeviceCard", () => {
       props: { device: { ...device, online: false, groupName: null } },
       slots: { actions: "<button>建映射</button>" },
     });
-    expect(w.find(".dot").attributes("data-online")).toBe("false");
+    expect(w.find(".dot").classes()).not.toContain("on");
+    expect(w.find(".dot").attributes("aria-label")).toBe("离线");
     expect(w.text()).toContain("离线");
     expect(w.find(".actions button").text()).toBe("建映射");
   });
@@ -110,5 +114,16 @@ describe("AdminLayout", () => {
     await w.setProps({ alert: "本地服务不可达" });
     expect(w.find(".alert").text()).toBe("本地服务不可达");
     expect(w.find(".alert").attributes("class")).toContain("visible");
+  });
+
+  it("菜单项 icon 属性渲染图标位（2026-10-20 评估批次 C；图标组件由宿主传入）", () => {
+    const icon = { render: () => h("svg") };
+    const w = mount(AdminLayout, {
+      // el-icon 以替身挂载（ui-shared 不直接依赖 Element Plus 组件注册）
+      props: { title: "t", menu: [{ path: "/", label: "仪表盘", icon }] },
+      global: { stubs: { RouterLink: RouterLinkStub, ElIcon: { template: "<i><slot /></i>" } } },
+    });
+    expect(w.find(".menu-item .menu-icon").exists()).toBe(true);
+    expect(w.find(".menu-item span").text()).toBe("仪表盘");
   });
 });

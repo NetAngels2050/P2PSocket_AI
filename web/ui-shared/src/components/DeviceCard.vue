@@ -22,7 +22,9 @@ defineProps<{ device: DeviceCardModel }>();
     <div class="row head">
       <span
         class="dot"
-        :data-online="device.online"
+        :class="{ on: device.online }"
+        role="img"
+        :aria-label="device.online ? '在线' : '离线'"
       />
       <span class="name">{{ device.deviceName }}</span>
       <span
@@ -64,9 +66,5 @@ defineProps<{ device: DeviceCardModel }>();
 .row.head .group { color: var(--el-text-color-secondary); font-size: 12px; }
 .row.meta { justify-content: space-between; }
 .online-text { font-size: 12px; color: var(--el-text-color-secondary); }
-.dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--el-color-danger-light-3);
-}
-.dot[data-online="true"] { background: var(--el-color-success); }
+/* .dot 上收 ui-shared/styles/shared.css（离线色统一灰，原浅红已废——2026-10-20 评估 V-3） */
 </style>

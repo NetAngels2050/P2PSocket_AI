@@ -159,7 +159,7 @@ onMounted(async () => {
         ref="addrForm"
         :model="{ serverAddr }"
         :rules="addrRules"
-        label-width="100px"
+        label-width="88px"
       >
         <el-form-item
           label="服务端地址"
@@ -208,7 +208,7 @@ onMounted(async () => {
         ref="groupForm"
         :model="{ inviteCode, username, password, deviceName }"
         :rules="groupRules"
-        label-width="100px"
+        label-width="88px"
       >
         <el-form-item label="分组方式">
           <el-radio-group
@@ -273,7 +273,7 @@ onMounted(async () => {
           data-testid="wizard-register"
           @click="submit"
         >
-          注册
+          注册并完成
         </el-button>
         <div
           v-if="groupError"
@@ -328,12 +328,13 @@ onMounted(async () => {
 <style scoped>
 .wizard { max-width: 640px; }
 .panel { margin-top: 24px; }
-.actions { display: flex; align-items: center; gap: 12px; margin-left: 100px; }
+/* label-width 定档 88px（2026-10-20 评估 V-3：label-width 三档 72/88/140 收敛） */
+.actions { display: flex; align-items: center; gap: 12px; margin-left: 88px; }
 .test-result { margin-left: 12px; font-size: 13px; }
 .test-result.ok { color: var(--el-color-success); }
 .test-result.bad { color: var(--el-color-danger); }
 .mode-hint { font-size: 12px; color: var(--el-text-color-secondary); width: 100%; }
-.error { color: var(--el-color-danger); font-size: 13px; }
+/* .error 上收 ui-shared/styles/shared.css（2026-10-20 评估批次 B） */
 .done .facts {
   display: grid;
   gap: 12px;

@@ -24,13 +24,23 @@ exports[`AdminLayout > 侧边栏菜单 + 顶栏 + 主区插槽（快照） 1`] =
         class="menu-item"
         data-v-e5e83559=""
       >
-        仪表盘
+        <!--v-if-->
+        <span
+          data-v-e5e83559=""
+        >
+          仪表盘
+        </span>
       </a>
       <a
         class="menu-item"
         data-v-e5e83559=""
       >
-        端口映射
+        <!--v-if-->
+        <span
+          data-v-e5e83559=""
+        >
+          端口映射
+        </span>
       </a>
       
     </nav>
@@ -84,9 +94,10 @@ exports[`DeviceCard > 渲染设备名/分组/远程码/在线态（快照） 1`]
     data-v-026086e9=""
   >
     <span
-      class="dot"
-      data-online="true"
+      aria-label="在线"
+      class="dot on"
       data-v-026086e9=""
+      role="img"
     />
     <span
       class="name"

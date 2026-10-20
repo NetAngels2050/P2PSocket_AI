@@ -33,7 +33,7 @@ async function add() {
 async function remove(segmentId: string, cidr: string) {
   try {
     await ElMessageBox.confirm(
-      `确定移除网段 ${cidr}？段内存量映射将失效（对端收 0x75 提示）。`,
+      `确定移除网段 ${cidr}？段内存量映射将失效，对端会收到失效提示。`,
       "移除确认",
       { type: "warning" },
     );
@@ -70,7 +70,7 @@ onMounted(() => void segments.refresh());
       title="变更即时生效"
       class="hint"
     >
-      开放网段是本机对外的目标地址白名单（self 恒放行）：段内地址可建映射，段外将被拒绝（4002）；
+      开放网段是本机对外的目标地址白名单（self 恒放行）：段内地址可建映射，段外将被拒绝；
       移除网段会使段内存量映射失效并推送对端。全开放须显式 0.0.0.0/0 或 ::/0。
     </el-alert>
 
@@ -116,7 +116,7 @@ onMounted(() => void segments.refresh());
         min-width="200"
       >
         <template #default="{ row }">
-          <code class="cidr">{{ row.cidr }}</code>
+          <code class="code-pill">{{ row.cidr }}</code>
         </template>
       </el-table-column>
       <el-table-column
@@ -153,16 +153,8 @@ onMounted(() => void segments.refresh());
 </template>
 
 <style scoped>
-.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.toolbar h2 { margin: 0; font-size: 16px; }
+/* .toolbar / .muted / .code-pill（原 .cidr）上收 ui-shared/styles/shared.css（2026-10-20 评估批次 B） */
 .hint { margin-bottom: 12px; }
 .add-form { margin-bottom: 12px; }
 .cidr-input { width: 320px; }
-.cidr {
-  font-size: 13px;
-  background: var(--el-fill-color-light);
-  border-radius: var(--el-border-radius-base);
-  padding: 0 6px;
-}
-.muted { color: var(--el-text-color-secondary); font-size: 12px; }
 </style>

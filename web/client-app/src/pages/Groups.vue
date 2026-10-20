@@ -461,7 +461,7 @@ onMounted(() => {
           />
         </el-form-item>
         <p class="muted">
-          自由加入的分组即时入组；需审批的分组将提交申请（3002）
+          自由加入的分组即时入组；需审批的分组将提交申请，等待所有者处理
         </p>
         <el-form-item>
           <el-button
@@ -709,7 +709,9 @@ onMounted(() => {
           <template #default="{ row }">
             <span
               class="dot"
-              :class="row.online ? 'on' : 'off'"
+              :class="{ on: row.online }"
+              role="img"
+              :aria-label="row.online ? '在线' : '离线'"
             />
             {{ row.deviceName }}
           </template>
@@ -742,18 +744,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.toolbar h2 { margin: 0; font-size: 16px; }
-.muted { color: var(--el-text-color-secondary); font-size: 12px; }
+/* .toolbar / .muted / .dot 上收 ui-shared/styles/shared.css（2026-10-20 评估批次 B） */
 .row { display: flex; gap: 8px; margin-top: 8px; }
 .pager { display: flex; justify-content: flex-end; margin-top: 8px; }
-.dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-right: 6px;
-}
-.dot.on { background: var(--el-color-success); }
-.dot.off { background: var(--el-text-color-disabled); }
 </style>

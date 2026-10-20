@@ -137,8 +137,7 @@ onMounted(() => void refresh());
 </template>
 
 <style scoped>
-.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.toolbar h2 { margin: 0; font-size: 16px; }
+/* .toolbar 上收 ui-shared/styles/shared.css（2026-10-20 评估批次 B） */
 .level { width: 130px; }
 .pager { margin-top: 12px; justify-content: flex-end; }
 </style>

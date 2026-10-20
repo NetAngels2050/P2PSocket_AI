@@ -10,7 +10,7 @@ interface TagStyle { text: string; kind: "info" | "warning" | "success" | "prima
 const TAGS: Record<string, TagStyle> = {
   disabled: { text: "已禁用", kind: "info" },
   punching: { text: "打洞中", kind: "warning" },
-  direct: { text: "直达", kind: "success" },
+  direct: { text: "直连", kind: "success" },
   relay: { text: "中继", kind: "primary" },
   failed: { text: "失败", kind: "danger" },
   invalid: { text: "失效", kind: "danger" },

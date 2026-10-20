@@ -43,7 +43,7 @@ function exportStats() {
 async function resetRemoteCode() {
   try {
     await ElMessageBox.confirm(
-      "重置后旧远程码立即失效：引用旧码的映射与打洞请求将被拒绝（4003），对端会收到失效提示并需改用新码。确定重置？",
+      "重置后旧远程码立即失效：引用旧码的映射与打洞请求将被拒绝，对端会收到失效提示并需改用新码。确定重置？",
       "重置远程码",
       { type: "warning", confirmButtonText: "重置", cancelButtonText: "取消" },
     );
@@ -105,7 +105,12 @@ onMounted(() => {
           <div class="row">
             <dt>控制通道</dt>
             <dd>
-              <span :class="['dot', system.state?.serverReachable ? 'on' : 'off']" />
+              <!-- 离线=异常语义用 .danger 红点（2026-10-20 评估 V-3：离线色统一——正常态灰、异常态红） -->
+              <span
+                :class="['dot', system.state?.serverReachable ? 'on' : 'danger']"
+                role="img"
+                :aria-label="system.state?.serverReachable ? '在线' : '离线'"
+              />
               {{ system.state?.serverReachable ? "在线" : "离线" }}
             </dd>
           </div>
@@ -254,20 +259,12 @@ onMounted(() => {
 }
 .tunnel-stats li { display: flex; align-items: center; gap: 12px; }
 .tunnel-stats b { margin-left: auto; }
-.muted { color: var(--el-text-color-secondary); font-size: 13px; margin: 12px 0 0; }
+/* .muted/.dot 上收 ui-shared/styles/shared.css（2026-10-20 评估批次 B）；此处仅留页内专属间距 */
+.muted { margin: 12px 0 0; }
 .stats { margin-bottom: 16px; }
 .stats-flex { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
 .stats-flex .el-table { flex: 1; min-width: 360px; }
 .totals { list-style: none; display: grid; gap: 8px; margin: 0; padding: 0; }
 .totals li { display: flex; gap: 12px; align-items: baseline; }
 .totals li span { color: var(--el-text-color-secondary); font-size: 13px; width: 60px; }
-.dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-right: 6px;
-}
-.dot.on { background: var(--el-color-success); }
-.dot.off { background: var(--el-color-danger); }
 </style>

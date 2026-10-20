@@ -286,10 +286,7 @@ onMounted(async () => {
   gap: 12px;
   margin-bottom: 12px;
 }
-.muted {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-}
+/* .muted 上收 ui-shared/styles/shared.css（2026-10-20 评估批次 B） */
 .el-pagination {
   margin-top: 16px;
   justify-content: flex-end;

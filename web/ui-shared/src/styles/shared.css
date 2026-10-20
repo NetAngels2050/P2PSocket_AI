@@ -1,0 +1,55 @@
+/* 共享样式层（2026-10-20 Web 评估批次 B，V-1/V-3 收口）：
+   两端（client-app 7100 / server-app 7500）共用的工具类与状态点——上收各页 scoped 拷贝
+   消灭复制漂移（.toolbar×5 / .muted×7 / .error×3 / .dot×4 / 码胶囊×2）。
+   约定：色值一律引用 Element Plus CSS 变量（主色沿用 EP 出厂蓝 #409eff，评估批复口径）；
+   页面不再自定义同名 scoped 类（scoped 特异性更高会反向覆盖此处）；
+   新增通用样式先入此处再复用，不回拷页面。宿主经 "@p2p/ui-shared/styles.css" 引入。 */
+
+/* 页头工具条：标题 + 主操作按钮行（列表页统一） */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.toolbar h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+/* 弱化辅助文字（字号统一定档 12px——原各页 12/13px 摇摆） */
+.muted {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+/* 表单提交失败的行内错误文案（错误呈现统一策略：表单类内联、行内/批量操作 toast） */
+.error {
+  color: var(--el-color-danger);
+  font-size: 13px;
+  margin: 0;
+}
+
+/* 状态点：默认=离线（灰，正常态）；.on=在线（绿）；.danger=异常语义（红，如控制通道断开）。
+   离线一律灰（评估 V-3 定案：设备/成员离线是正常态不用红色），红色仅保留给异常告警。 */
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--el-text-color-disabled);
+}
+.dot.on { background: var(--el-color-success); }
+.dot.danger { background: var(--el-color-danger); }
+
+/* 代码胶囊：远程码/网段等等宽值展示（原 Devices .seg 与 Segments .cidr 两份收敛） */
+.code-pill {
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  background: var(--el-fill-color-light);
+  border-radius: var(--el-border-radius-base);
+  padding: 0 6px;
+}
