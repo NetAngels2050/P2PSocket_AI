@@ -187,7 +187,15 @@ onMounted(() => {
   margin-bottom: 16px;
 }
 .page-head h2 { margin: 0; }
-.group-rows { display: flex; flex-direction: column; border: 1px solid var(--el-border-color-light); border-radius: var(--el-border-radius-base); }
+/* 简易版科技感：分组行容器走青蓝暗框（与玻璃卡同族） */
+.group-rows {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 12px;
+  background: rgba(10, 16, 30, 0.5);
+  overflow: hidden;
+}
 .group-row {
   display: flex;
   align-items: center;
@@ -195,10 +203,16 @@ onMounted(() => {
   padding: 12px 14px;
   font-size: 14px;
 }
-.group-row + .group-row { border-top: 1px solid var(--el-border-color-lighter); }
-.g-name { font-weight: 600; }
+.group-row + .group-row { border-top: 1px solid rgba(56, 189, 248, 0.1); }
+.g-name { font-weight: 600; color: #e2e8f0; }
 .spacer { flex: 1; }
-.pending { color: var(--el-color-warning); text-decoration: none; font-size: 13px; font-weight: 600; }
+.pending {
+  color: #fbbf24;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  text-shadow: 0 0 10px rgba(251, 191, 36, 0.4);
+}
 .adv-hint { margin-top: 14px; }
 .error { color: var(--el-color-danger); font-size: 13px; margin: 4px 0 0; }
 </style>

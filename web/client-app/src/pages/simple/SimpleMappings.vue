@@ -222,7 +222,8 @@ onMounted(() => {
 }
 .page-head h2 { margin: 0; }
 .map-cards { display: flex; flex-direction: column; gap: 12px; }
-.map-card.is-failed { border-color: var(--el-color-danger-light-5); }
+/* 失败卡红色描边（simple-tech.css 另有顶部红线与 hover 红晕） */
+.map-card.is-failed { border-color: rgba(248, 113, 113, 0.45); }
 .card-row {
   display: flex;
   align-items: center;
@@ -230,7 +231,7 @@ onMounted(() => {
   font-size: 14px;
 }
 .card-row + .card-row { margin-top: 10px; }
-.card-row.head .name { font-weight: 600; font-size: 15px; }
+.card-row.head .name { font-weight: 600; font-size: 15px; color: #e2e8f0; }
 .spacer { flex: 1; }
 .row-label {
   width: 64px;
@@ -243,9 +244,10 @@ onMounted(() => {
 .fail {
   margin-top: 10px;
   padding: 8px 10px;
-  border-radius: var(--el-border-radius-base);
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.28);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  color: #fca5a5;
   font-size: 13px;
 }
 .fail span { flex: 1; }

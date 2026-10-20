@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import { createPinia } from "pinia";
 import ElementPlus from "element-plus";
 import "element-plus/dist/index.css";
+import "element-plus/theme-chalk/dark/css-vars.css"; // EP 官方暗色变量（仅 html.dark 生效——简易版科技感深色皮肤用，高级版浅色不受影响）
 import "@p2p/ui-shared/styles.css"; // 共享样式层（2026-10-20 评估批次 B：.toolbar/.muted/.error/.dot/.code-pill）
 import App from "./App.vue";
 import { router } from "./router";

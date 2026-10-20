@@ -1,0 +1,127 @@
+/* 简易版科技感皮肤（用户指令 2026-10-20"简易版要有科技感"）：深蓝黑底+青蓝霓虹+
+ * 发光数据。全部规则限定 html.simple-tech 作用域——该类由 SimpleLayout 挂载期加到
+ * <html>（连同 EP 官方 dark 类）、卸载期摘除，高级版/登录页/向导页保持浅色出厂态
+ * （全站深色模式仍为暂缓项，本皮肤是简易版专属视觉，FR-C-810"时尚性"的实现层）。
+ * 布局/页面自有元素在各自 scoped 样式里直接用深色字面值（这些页面只在简易版渲染）；
+ * 本文件只放跨页面/EP 组件层的皮肤：令牌、页面底色网格、el-card 玻璃卡、主按钮、
+ * 状态点霓虹、码胶囊等宽字体、滚动条。 */
+
+html.simple-tech {
+  --tech-bg: #070b14;
+  --tech-cyan: #22d3ee;
+  --tech-blue: #3b82f6;
+  --tech-text: #e2e8f0;
+  --tech-dim: #8aa0bf;
+  --tech-border: rgba(56, 189, 248, 0.22);
+  --tech-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+}
+
+/* 页面底色：深蓝黑 + 微网格 + 双径向光晕（fixed 背景随滚动稳定） */
+html.simple-tech body {
+  background-color: var(--tech-bg);
+  background-image:
+    radial-gradient(1100px 480px at 75% -8%, rgba(34, 211, 238, 0.09), transparent 62%),
+    radial-gradient(880px 420px at 8% 108%, rgba(59, 130, 246, 0.07), transparent 60%),
+    linear-gradient(rgba(125, 142, 168, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(125, 142, 168, 0.055) 1px, transparent 1px);
+  background-size: auto, auto, 44px 44px, 44px 44px;
+  background-attachment: fixed;
+  color: var(--tech-text);
+}
+
+/* 滚动条暗色化 */
+html.simple-tech ::-webkit-scrollbar { width: 10px; height: 10px; }
+html.simple-tech ::-webkit-scrollbar-thumb { background: rgba(56, 189, 248, 0.25); border-radius: 6px; }
+html.simple-tech ::-webkit-scrollbar-thumb:hover { background: rgba(56, 189, 248, 0.4); }
+html.simple-tech ::-webkit-scrollbar-track { background: transparent; }
+
+/* 页标题（三页共用 .page-head h2 结构） */
+.simple-tech .page-head h2 {
+  font-size: 18px;
+  color: var(--tech-text);
+  letter-spacing: 0.02em;
+}
+
+/* el-card → 玻璃卡：半透明深底 + 青蓝描边 + 顶部霓虹装饰线，hover 亮起 */
+.simple-tech .el-card {
+  background-image: linear-gradient(180deg, rgba(17, 26, 46, 0.72), rgba(10, 16, 30, 0.72));
+  border: 1px solid var(--tech-border);
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.04), 0 8px 28px rgba(2, 6, 17, 0.55);
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.simple-tech .el-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--tech-cyan), transparent);
+  opacity: 0.55;
+}
+.simple-tech .el-card:hover {
+  border-color: rgba(34, 211, 238, 0.45);
+  box-shadow: 0 0 18px rgba(34, 211, 238, 0.1), 0 10px 30px rgba(2, 6, 17, 0.6);
+}
+.simple-tech .el-card__header {
+  border-bottom: 1px solid rgba(56, 189, 248, 0.14);
+  color: var(--tech-dim);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  padding: 10px 16px;
+}
+/* 失败映射卡：红色系霓虹替换青色装饰 */
+.simple-tech .el-card.is-failed { border-color: rgba(248, 113, 113, 0.45); }
+.simple-tech .el-card.is-failed::before {
+  background: linear-gradient(90deg, transparent, #f87171, transparent);
+}
+.simple-tech .el-card.is-failed:hover {
+  border-color: rgba(248, 113, 113, 0.65);
+  box-shadow: 0 0 18px rgba(248, 113, 113, 0.12), 0 10px 30px rgba(2, 6, 17, 0.6);
+}
+
+/* 主按钮 → 青蓝渐变+发光（hover/focus 同值防闪烁；EP hover 只改 background-color，
+ * 渐变是 background-image 压在上面，故三态一并声明）；禁用态 EP 降透明度仍可辨识 */
+.simple-tech .el-button--primary,
+.simple-tech .el-button--primary:hover,
+.simple-tech .el-button--primary:focus {
+  background-image: linear-gradient(135deg, #22d3ee, #3b82f6);
+  background-color: transparent;
+  border: none;
+  color: #04121f;
+  font-weight: 600;
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.3);
+}
+/* plain 主按钮（如失败卡「重试」）走青色幽灵样式，不套渐变 */
+.simple-tech .el-button--primary.is-plain,
+.simple-tech .el-button--primary.is-plain:hover,
+.simple-tech .el-button--primary.is-plain:focus {
+  background-image: none;
+  background-color: rgba(34, 211, 238, 0.08);
+  border: 1px solid rgba(34, 211, 238, 0.45);
+  color: #67e8f9;
+  box-shadow: none;
+  font-weight: 500;
+}
+
+/* 状态点（shared.css .dot 家族）→ 霓虹发光 + 在线呼吸脉冲 */
+@keyframes tech-pulse {
+  0% { box-shadow: 0 0 10px rgba(52, 211, 153, 0.75), 0 0 0 0 rgba(52, 211, 153, 0.4); }
+  70% { box-shadow: 0 0 10px rgba(52, 211, 153, 0.75), 0 0 0 6px rgba(52, 211, 153, 0); }
+  100% { box-shadow: 0 0 10px rgba(52, 211, 153, 0.75), 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+html.simple-tech .dot.on {
+  background: #34d399;
+  animation: tech-pulse 2.2s ease-out infinite;
+}
+html.simple-tech .dot.danger {
+  background: #f87171;
+  box-shadow: 0 0 10px rgba(248, 113, 113, 0.65);
+}
+@media (prefers-reduced-motion: reduce) {
+  html.simple-tech .dot.on { animation: none; box-shadow: 0 0 10px rgba(52, 211, 153, 0.75); }
+}
+
+/* 码胶囊（远程码/连接地址）→ 等宽字体 */
+html.simple-tech .code-pill { font-family: var(--tech-mono); }

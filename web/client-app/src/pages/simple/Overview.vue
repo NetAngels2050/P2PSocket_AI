@@ -147,32 +147,48 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* 简易版科技感（2026-10-20）：本页只在简易版渲染，字面值直接用深色霓虹口径；
+ * 卡片玻璃底/描边/头部 kicker 由 simple-tech.css 全局层负责。 */
 .cards {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 16px;
 }
 .device-line { display: flex; align-items: center; gap: 8px; }
-.device-name { font-weight: 600; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-success); display: inline-block; }
-.dot.danger { background: var(--el-color-danger); }
+.device-name { font-weight: 600; color: #e2e8f0; }
+/* .dot/.dot.on/.dot.danger 由 shared.css+simple-tech.css 提供（霓虹+呼吸脉冲） */
 .code-line { margin-top: 12px; display: flex; align-items: center; gap: 8px; }
 .rate-big { display: flex; flex-direction: column; gap: 6px; }
-.rate-item { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* 数据大字：等宽+青色辉光（科技感核心元素） */
+.rate-item {
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #a5f3fc;
+  text-shadow: 0 0 16px rgba(34, 211, 238, 0.45);
+}
 .arrow { margin-right: 8px; font-size: 16px; }
-.arrow.up { color: var(--el-color-success); }
-.arrow.down { color: var(--el-color-primary); }
-.map-total { font-size: 22px; font-weight: 700; }
+.arrow.up { color: #34d399; }
+.arrow.down { color: #38bdf8; }
+.map-total {
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #e2e8f0;
+  text-shadow: 0 0 14px rgba(125, 211, 252, 0.3);
+}
 .map-breakdown {
   margin-top: 10px;
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
   font-size: 13px;
-  color: var(--el-text-color-secondary);
+  color: #8aa0bf;
 }
-.failed-link { color: var(--el-color-danger); text-decoration: none; font-weight: 600; }
-.ok { color: var(--el-color-success); }
+.failed-link { color: #f87171; text-decoration: none; font-weight: 600; text-shadow: 0 0 12px rgba(248, 113, 113, 0.5); }
+.ok { color: #34d399; }
 .cta { margin-top: 28px; text-align: center; }
 .cta .muted { margin-top: 8px; }
 </style>

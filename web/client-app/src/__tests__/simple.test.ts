@@ -264,3 +264,19 @@ describe("简易版·分组", () => {
     expect(dialogShown("simple-join-dialog")).toBe(false);
   });
 });
+
+// ── 科技感主题（2026-10-20 用户指令"简易版要有科技感"） ─────────────────
+
+describe("简易版科技感主题", () => {
+  it("进入简易版挂 dark+simple-tech，切高级版即摘除还原浅色", async () => {
+    const cl = document.documentElement.classList;
+    const { router } = await mountPage(Root, normalState(), "/simple");
+    expect(cl.contains("dark")).toBe(true);
+    expect(cl.contains("simple-tech")).toBe(true);
+
+    await router.push("/dashboard");
+    await flushPromises();
+    expect(cl.contains("dark")).toBe(false);
+    expect(cl.contains("simple-tech")).toBe(false);
+  });
+});

@@ -4,10 +4,14 @@
 // 内容区 960px 水平居中（用户指令"页面水平居中"）。
 // App 级 useWs 断连告警经 provide("simpleAlert") 注入（简易版不经 AdminLayout 的 alert 条）；
 // 网段冲突横幅与高级版同源（system store 驱动，FR-C-204）。
-import { computed, inject, type Ref } from "vue";
+// 科技感主题（用户指令 2026-10-20）：挂载期给 <html> 加 dark（EP 官方暗色变量，全局
+// 生效含 teleport 弹层）+ simple-tech（simple-tech.css 皮肤），卸载期摘除——高级版/
+// 登录页/向导页保持浅色出厂态，切换即还原。
+import { computed, inject, onBeforeUnmount, onMounted, type Ref } from "vue";
 import { useSystemStore } from "../stores/system";
 import { useAuthStore } from "../stores/auth";
 import SubnetConflictBanner from "../components/SubnetConflictBanner.vue";
+import "./simple-tech.css";
 
 const TABS = [
   { path: "/simple", label: "概览" },
@@ -25,6 +29,9 @@ const headerText = computed(() =>
     ? `${auth.me.username}（${auth.me.mode === "normal" ? "已登录" : "哑节点"}）`
     : "未登录",
 );
+
+onMounted(() => document.documentElement.classList.add("dark", "simple-tech"));
+onBeforeUnmount(() => document.documentElement.classList.remove("dark", "simple-tech"));
 </script>
 
 <template>
@@ -82,13 +89,25 @@ const headerText = computed(() =>
 </template>
 
 <style scoped>
+/* 本布局只在简易版渲染——scoped 样式直接用深色字面值（科技感，simple-tech.css 负责全局层） */
 .simple-layout { min-height: 100vh; display: flex; flex-direction: column; }
 .simple-header {
-  border-bottom: 1px solid var(--el-border-color-light);
-  background: var(--el-bg-color);
   position: sticky;
   top: 0;
   z-index: 10;
+  background: rgba(7, 11, 20, 0.78);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+/* 底部霓虹渐变分割线 */
+.simple-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 4%, rgba(34, 211, 238, 0.55) 50%, transparent 96%);
 }
 .header-inner {
   max-width: 960px; /* 内容水平居中（用户指令） */
@@ -99,49 +118,71 @@ const headerText = computed(() =>
   align-items: center;
   gap: 24px;
 }
+/* 品牌渐变文字 + 光标方块 */
 .brand {
-  font-weight: 700;
+  font-weight: 800;
   font-size: 15px;
-  color: var(--el-text-color-primary);
+  letter-spacing: 0.05em;
   text-decoration: none;
+  background: linear-gradient(120deg, #7dd3fc, #22d3ee 45%, #3b82f6);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
 }
-.tabs { display: flex; gap: 4px; flex: 1; }
+.brand::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 8px;
+  border-radius: 3px;
+  background: linear-gradient(135deg, #22d3ee, #3b82f6);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.8);
+}
+.tabs { display: flex; gap: 6px; flex: 1; }
 .tab {
   padding: 6px 14px;
-  border-radius: var(--el-border-radius-base);
-  color: var(--el-text-color-regular);
+  border-radius: 8px;
+  border: 1px solid transparent;
+  color: #8aa0bf;
   text-decoration: none;
   font-size: 14px;
+  transition: color 0.2s, box-shadow 0.2s, background-color 0.2s;
 }
-/* 前缀匹配会把 /simple 也激活在子路由——精确激活才高亮 */
-.tab.router-link-exact-active { background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-weight: 600; }
-.tab:hover { background: var(--el-fill-color-light); }
+.tab:hover { color: #cfe3ff; }
+/* 前缀匹配会把 /simple 也激活在子路由——精确激活才高亮（青色描边+内发光下划线） */
+.tab.router-link-exact-active {
+  color: #67e8f9;
+  font-weight: 600;
+  border-color: rgba(34, 211, 238, 0.35);
+  background: rgba(34, 211, 238, 0.08);
+  box-shadow: inset 0 -2px 0 #22d3ee, 0 6px 16px -10px rgba(34, 211, 238, 0.6);
+}
 .header-right { display: flex; align-items: center; gap: 10px; }
-.dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--el-color-success);
-}
-.dot.danger { background: var(--el-color-danger); }
-.online-text { font-size: 13px; }
-.who { font-size: 13px; color: var(--el-text-color-secondary); }
+/* .dot/.dot.on/.dot.danger 由 shared.css 定义、simple-tech.css 加霓虹——此处不再重复 */
+.online-text { font-size: 13px; color: #cbd5e1; }
+.who { font-size: 13px; color: #8aa0bf; }
 .advanced {
   font-size: 13px;
-  color: var(--el-color-primary);
+  color: #67e8f9;
   text-decoration: none;
-  border: 1px solid var(--el-color-primary-light-5);
-  border-radius: var(--el-border-radius-base);
+  border: 1px solid rgba(34, 211, 238, 0.45);
+  border-radius: 8px;
   padding: 3px 10px;
+  background: rgba(34, 211, 238, 0.06);
+  transition: background-color 0.2s, box-shadow 0.2s;
 }
-.advanced:hover { background: var(--el-color-primary-light-9); }
+.advanced:hover {
+  background: rgba(34, 211, 238, 0.15);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.25);
+}
 .ws-alert {
   padding: 6px 16px;
   font-size: 13px;
-  color: var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
-  border-bottom: 1px solid var(--el-color-danger-light-8);
+  color: #fca5a5;
+  background: rgba(127, 29, 29, 0.4);
+  border-bottom: 1px solid rgba(248, 113, 113, 0.35);
   text-align: center;
 }
 .simple-main {
