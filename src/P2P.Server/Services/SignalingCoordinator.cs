@@ -69,6 +69,7 @@ public sealed class SignalingCoordinator : IAsyncDisposable
         public required PeerInfo InitiatorInfo { get; init; }
         public required PeerInfo TargetInfo { get; init; }
         public required EndpointPair RequesterEndpoints { get; init; }
+        public required P2P.Core.Protocol.Endpoint[]? RequesterCandidates { get; init; } // 0x70 直连候选透传（§5.4，纯存转）
         public required string Proto { get; init; }               // 0x70 载荷（udp|tcp，M2-08 统计）
         public required byte PunchCount { get; init; }
         public required bool RelayAllowed { get; init; }               // relay_enabled 合成（M2-07）
@@ -141,6 +142,7 @@ public sealed class SignalingCoordinator : IAsyncDisposable
             InitiatorInfo = new PeerInfo(a.Id, a.DeviceName, a.RemoteCode, a.StaticPubKey),
             TargetInfo = new PeerInfo(b.Id, b.DeviceName, b.RemoteCode, b.StaticPubKey),
             RequesterEndpoints = msg.RequesterEndpoints ?? new EndpointPair(null, null),
+            RequesterCandidates = msg.LocalCandidates, // §5.4 直连优先：A 的本机候选随 0x71 透传（存转零解析）
             Proto = string.IsNullOrWhiteSpace(msg.Proto) ? "udp" : msg.Proto, // 旧端缺省容忍（02 §7）
             // OQ-19/TD-20（M2-16）：取发起方请求值（越界/缺省 → 3，容忍哲学），Ack/Invite 统一回填
             PunchCount = PunchPolicy.Normalize(msg.PunchConcurrency),
@@ -162,9 +164,10 @@ public sealed class SignalingCoordinator : IAsyncDisposable
             _sessions[s.SessionId] = s;
         }
 
-        // ① 第一段：向 B 下发 PunchInvite（A 信息/端点/N/relayAllowed，02 §5.1②）
+        // ① 第一段：向 B 下发 PunchInvite（A 信息/端点/N/relayAllowed/A 直连候选，02 §5.1②·§5.4）
         var invite = new PunchInvite(s.Target.NextSeq(), s.Target.ServerTimestamp(), MsgType.PunchInvite,
-            s.SessionId, s.InitiatorInfo, s.RequesterEndpoints, s.PunchCount, s.RelayAllowed);
+            s.SessionId, s.InitiatorInfo, s.RequesterEndpoints, s.PunchCount, s.RelayAllowed,
+            LocalCandidates: s.RequesterCandidates);
         await SafePushAsync(s.Target, invite); // B 中途掉线：由 reaper 超时收尾
     }
 
@@ -181,9 +184,10 @@ public sealed class SignalingCoordinator : IAsyncDisposable
             RetainForRelayNoLock(s); // 台账：0x74 打洞失败后解析对端（M2-07）
         }
 
-        // ② 第二段：向 A 下发延后 Ack（B 信息 + B 端点；OQ-18/TD-19）
+        // ② 第二段：向 A 下发延后 Ack（B 信息 + B 端点 + B 直连候选；OQ-18/TD-19·§5.4）
         var ack = new PunchRequestAck(s.Initiator.NextSeq(), s.Initiator.ServerTimestamp(),
-            MsgType.PunchRequest, s.SessionId, s.TargetInfo, msg.Endpoints, s.PunchCount, s.RelayAllowed);
+            MsgType.PunchRequest, s.SessionId, s.TargetInfo, msg.Endpoints, s.PunchCount, s.RelayAllowed,
+            PeerLocalCandidates: msg.LocalCandidates);
         await SafePushAsync(s.Initiator, ack); // A 中途掉线：无接收方，静默
 
         await ProcessQueueAsync();

@@ -62,6 +62,7 @@ function openCreate() {
     targetPort: 80,
   });
   drawer.value = true;
+  void devices.refresh(); // 下拉候选取最新在线态（镜像简易版向导开窗刷新）
 }
 
 function openEdit(id: string) {
@@ -349,11 +350,32 @@ onMounted(() => {
           label="目标远程码"
           prop="targetRemoteCode"
         >
-          <el-input
+          <!-- 设备下拉（与简易版同款「设备名（远程码）」filterable）；离线设备可选不禁选——
+               高级版保留预建映射能力（建好等对端上线再启用），仅以「离线」tag 提示 -->
+          <el-select
             v-model="form.targetRemoteCode"
-            maxlength="6"
+            filterable
+            placeholder="搜索并选择设备（名称或远程码）"
+            style="width: 100%"
             data-testid="mapping-remote-code"
-          />
+          >
+            <el-option
+              v-for="d in devices.items"
+              :key="d.deviceId"
+              :value="d.remoteCode"
+              :label="`${d.deviceName}（${d.remoteCode}）`"
+            >
+              <span>{{ d.deviceName }}（{{ d.remoteCode }}）</span>
+              <el-tag
+                v-if="!d.online"
+                size="small"
+                type="danger"
+                class="off-tag"
+              >
+                离线
+              </el-tag>
+            </el-option>
+          </el-select>
         </el-form-item>
         <el-form-item label="目标地址">
           <el-radio-group
@@ -424,6 +446,7 @@ onMounted(() => {
 /* .toolbar / .muted 上收 ui-shared/styles/shared.css（2026-10-20 评估批次 B） */
 .rate { font-size: 13px; white-space: nowrap; }
 .seg-hint { margin: 6px 0 0; width: 100%; }
+.off-tag { margin-left: 8px; } /* 目标远程码下拉离线提示（同简易版向导） */
 .detail-mark {
   display: inline-block;
   margin-left: 4px;

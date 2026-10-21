@@ -178,6 +178,47 @@ public sealed class SignalingTests : IAsyncLifetime
         Assert.Equal(expected, ack.PunchCount); // 双方该次打洞执行同一 N（02 §5.2② 对称性硬约束）
     }
 
+    // ── §5.4 直连优先（2026-10-21）：LocalCandidates 双段透传（服务端纯存转零解析）──
+
+    [Fact]
+    public async Task Punch_LocalCandidates_PassedThroughToInviteAndAck()
+    {
+        var (a, _, _) = await RegisterAsync("cand-a");
+        var (b, bId, _) = await RegisterAsync("cand-b");
+        var aCandidates = new[] { new Endpoint("192.168.1.10", 40001), new Endpoint("10.0.0.5", 40001) };
+
+        await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
+            bId, null, "udp", UdpOnly("203.0.113.10", 50000), null,
+            LocalCandidates: aCandidates));
+        var invite = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("B 未收到 PunchInvite");
+        Assert.Equal(aCandidates, invite.LocalCandidates); // A 的本机候选原样透传给 B
+
+        var bCandidates = new[] { new Endpoint("192.168.1.20", 40002) };
+        await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
+            invite.SessionId, UdpOnly("198.51.100.20", 50001),
+            LocalCandidates: bCandidates));
+        var ack = await a.ReceiveAsync<PunchRequestAck>() ?? throw new IOException("A 未收到延后 Ack");
+        Assert.Equal(bCandidates, ack.PeerLocalCandidates); // B 的本机候选原样透传给 A
+    }
+
+    [Fact]
+    public async Task Punch_OldClientNoCandidates_NullPassthrough()
+    {
+        // 旧端混布（02 §7 尾部可空字段缺省容忍）：0x70/0x76 不带候选 → 透传 null，链路照常
+        var (a, _, _) = await RegisterAsync("old-a");
+        var (b, bId, _) = await RegisterAsync("old-b");
+
+        await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
+            bId, null, "udp", UdpOnly("203.0.113.10", 50000), null));
+        var invite = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("B 未收到 PunchInvite");
+        Assert.Null(invite.LocalCandidates);
+
+        await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
+            invite.SessionId, UdpOnly("198.51.100.20", 50001)));
+        var ack = await a.ReceiveAsync<PunchRequestAck>() ?? throw new IOException("A 未收到延后 Ack");
+        Assert.Null(ack.PeerLocalCandidates);
+    }
+
     // ── 完成判定②：L2 拒 4001 + punch_deny 审计 ──────────────────────
 
     [Fact]

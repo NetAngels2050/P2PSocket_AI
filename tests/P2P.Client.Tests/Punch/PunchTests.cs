@@ -142,44 +142,54 @@ public sealed class PuncherTests
         public TaskCompletionSource<EndpointPair> Reported { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ConcurrentQueue<(Guid SessionId, EndpointPair Endpoints)> Reports { get; } = [];
-        public Func<Guid, Guid?, string, EndpointPair, CancellationToken, Task<PunchRequestAck>>? RequestHandler;
+        public ConcurrentQueue<Endpoint[]?> ReportedCandidates { get; } = []; // §5.4 B 侧 0x76 候选
+        public Func<Guid, Guid?, string, EndpointPair, Endpoint[]?, CancellationToken, Task<PunchRequestAck>>? RequestHandler;
         public Exception? RequestError;
+
+        /// <summary>探测返回的映射端口 = 真实本地口 + 平移量（0=恒等；&gt;0=假映射，该口无人监听）。</summary>
+        public int ProbePortShift;
 
         public Task<IPEndPoint> ProbeAsync(Socket socket, CancellationToken ct)
         {
-            // socket 绑 0.0.0.0：模拟 STUN 返回真实可达地址（回环同端口）
+            // socket 绑 0.0.0.0：模拟 STUN 返回回环地址（+平移量即「映射口≠真实口/不可直达」样）
             var ep = (IPEndPoint)socket.LocalEndPoint!;
-            var mapped = new IPEndPoint(IPAddress.Loopback, ep.Port);
+            var mapped = new IPEndPoint(IPAddress.Loopback, ep.Port + ProbePortShift);
             Probed.TrySetResult(new EndpointPair(new P2P.Core.Protocol.Endpoint(
                 mapped.Address.ToString(), (ushort)mapped.Port), null));
             return Task.FromResult(mapped);
         }
 
-        public Task ReportAsync(Guid sessionId, EndpointPair endpoints, CancellationToken ct)
+        public Task ReportAsync(Guid sessionId, EndpointPair endpoints, Endpoint[]? localCandidates,
+            CancellationToken ct)
         {
             Reports.Enqueue((sessionId, endpoints));
+            ReportedCandidates.Enqueue(localCandidates);
             Reported.TrySetResult(endpoints);
             return Task.CompletedTask;
         }
 
         public Task<PunchRequestAck> SendRequestAsync(Guid target, Guid? trigger, string proto,
-            EndpointPair requesterEndpoints, CancellationToken ct)
+            EndpointPair requesterEndpoints, Endpoint[]? localCandidates, CancellationToken ct)
         {
             if (RequestError is not null) return Task.FromException<PunchRequestAck>(RequestError);
-            if (RequestHandler is not null) return RequestHandler(target, trigger, proto, requesterEndpoints, ct);
+            if (RequestHandler is not null)
+                return RequestHandler(target, trigger, proto, requesterEndpoints, localCandidates, ct);
             return Task.FromResult(new PunchRequestAck(0, 0, MsgType.PunchRequest, Guid.NewGuid(),
                 new PeerInfo(target, "?", "000000", []),
                 new EndpointPair(new P2P.Core.Protocol.Endpoint("127.0.0.1", 1), null), 3, false));
         }
     }
 
-    private static (Puncher Puncher, FakeSeams Seams) Make(EcKeyPair staticKey) =>
-        Make(staticKey, out _);
+    private static (Puncher Puncher, FakeSeams Seams) Make(EcKeyPair staticKey,
+        int probePortShift = 0, Func<IPAddress?, IReadOnlyList<IPAddress>>? localIps = null)
+        => Make(staticKey, out _, probePortShift, localIps);
 
-    private static (Puncher Puncher, FakeSeams Seams) Make(EcKeyPair staticKey, out FakeSeams seams)
+    private static (Puncher Puncher, FakeSeams Seams) Make(EcKeyPair staticKey, out FakeSeams seams,
+        int probePortShift = 0, Func<IPAddress?, IReadOnlyList<IPAddress>>? localIps = null)
     {
-        seams = new FakeSeams();
-        return (new Puncher(seams.SendRequestAsync, seams.ReportAsync, seams.ProbeAsync, staticKey), seams);
+        seams = new FakeSeams { ProbePortShift = probePortShift };
+        return (new Puncher(seams.SendRequestAsync, seams.ReportAsync, seams.ProbeAsync, staticKey,
+            localIpEnumerator: localIps), seams);
     }
 
     [Fact]
@@ -199,7 +209,7 @@ public sealed class PuncherTests
         {
             EndpointPair? requestedByA = null;
             // A 的 0x70 假缝：模拟服务端——等 B 的 0x76 端点上报后回延后 Ack（02 §5.1④）
-            seamsA.RequestHandler = async (target, trigger, proto, endpoints, ct) =>
+            seamsA.RequestHandler = async (target, trigger, proto, endpoints, candidates, ct) =>
             {
                 var bReported = await seamsB.Reported.Task;
                 requestedByA = endpoints;
@@ -300,6 +310,54 @@ public sealed class PuncherTests
             var outcome = await puncher.InitiateAsync(Guid.NewGuid(), null, "udp");
             Assert.False(outcome.Ok);
             Assert.Contains("server_4005", outcome.FailReason); // OQ-18：B 离线立即 failed 不等超时
+        }
+    }
+
+    // ── §5.4 直连优先（2026-10-21）：UDP 候选扇出+首包钉定回程 ──
+
+    [Fact]
+    public async Task 映射端点皆不可达_候选直连命中_回程钉定真实源()
+    {
+        // 双侧假映射（探测口=真实口+9，无人监听 → 主端点路径必丢）；候选=127.0.0.1×真实口。
+        // A 的 THello1 扇出经候选达 B；B 收包即钉定 A 真实源并沿之应答——全链仅候选+pin 存活。
+        using var staticA = EcKeyPair.Generate();
+        using var staticB = EcKeyPair.Generate();
+        var deviceA = Guid.NewGuid();
+        var deviceB = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+        var loopback = (Func<IPAddress?, IReadOnlyList<IPAddress>>)
+            (static _ => (IReadOnlyList<IPAddress>)[IPAddress.Loopback]);
+
+        var (puncherA, seamsA) = Make(staticA, probePortShift: 9, localIps: loopback);
+        var (puncherB, seamsB) = Make(staticB, probePortShift: 9, localIps: loopback);
+        using (puncherA)
+        using (puncherB)
+        {
+            seamsA.RequestHandler = async (target, trigger, proto, endpoints, candidates, ct) =>
+            {
+                var bReported = await seamsB.Reported.Task;
+                return new PunchRequestAck(0, 0, MsgType.PunchRequest, sessionId,
+                    new PeerInfo(deviceB, "B", "b00000", staticB.ExportPublicKey()),
+                    new EndpointPair(bReported.Udp, null), 3, false,
+                    PeerLocalCandidates: seamsB.ReportedCandidates.Single()); // B 候选透传
+            };
+
+            var outcomeATask = puncherA.InitiateAsync(deviceB, null, "udp");
+            var aEp = await seamsA.Probed.Task;
+            var invite = new PunchInvite(0, 0, MsgType.PunchInvite, sessionId,
+                new PeerInfo(deviceA, "A", "a00000", staticA.ExportPublicKey()),
+                new EndpointPair(aEp.Udp, null), 3, false); // 不带候选：B 无出站可达路径——
+            var outcomeB = await puncherB.RespondAsync(invite); // 只能靠收包钉定的真实源应答
+            var outcomeA = await outcomeATask;
+
+            Assert.True(outcomeA.Ok, outcomeA.FailReason); // 主端点死：唯一活路=候选扇出
+            Assert.True(outcomeB.Ok, outcomeB.FailReason);
+            // pin 断言：A 钉定 B 真实口=候选口；B 钉定 A 真实口（探测假口−平移量）
+            var bCandidates = seamsB.ReportedCandidates.Single()!;
+            Assert.Equal(bCandidates[0].Port, outcomeA.PeerEndpoint!.Port);
+            Assert.Equal(aEp.Udp!.Port - 9, outcomeB.PeerEndpoint!.Port);
+            await outcomeA.Session!.DisposeAsync();
+            await outcomeB.Session!.DisposeAsync();
         }
     }
 }

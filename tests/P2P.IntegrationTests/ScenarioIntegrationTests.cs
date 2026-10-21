@@ -193,12 +193,19 @@ public sealed class ScenarioIntegrationTests : IAsyncLifetime
         return group;
     }
 
+    /// <summary>空候选枚举（§5.4 默认缝）：无本机候选上报——打洞行为与 M2 期一致（纯映射路径）。</summary>
+    private static readonly Func<IPAddress?, IReadOnlyList<IPAddress>> EmptyLocalCandidates =
+        static _ => Array.Empty<IPAddress>();
+
     /// <summary>启动客户端运行时（网卡替身 + 打洞 socket 绑内网别名缝；诊断日志进测试产物；
     /// relayRetryInterval：M2-19 回切 60s 周期的缩短缝——周期机制本身驱动回切，间接验证触发；
     /// statsInterval：M2-22 0x64 30s 上报周期的缩短缝——周期落库与停机补报验证；
-    /// subnetSurvey：M3-13 网段冲突检测的枚举源替身缝——注入可变数据驱动命中/解除全链）。</summary>
+    /// subnetSurvey：M3-13 网段冲突检测的枚举源替身缝——注入可变数据驱动命中/解除全链；
+    /// localCandidates：§5.4 本机候选默认关——回环别名 fabric 全互通，候选直连会击穿
+    /// 「跨 NAT 不可直达」的必败前提（M2-18/22/32/37）；同网段用例显式开启驱动候选路径）。</summary>
     private async Task<HttpClient> StartRuntimeAsync(SeededClient c, TimeSpan? relayRetryInterval = null,
-        TimeSpan? statsInterval = null, SubnetConflictDetector.SurveySource? subnetSurvey = null)
+        TimeSpan? statsInterval = null, SubnetConflictDetector.SurveySource? subnetSurvey = null,
+        bool localCandidates = false)
     {
         // 每运行时独立网卡替身：共享单例时后启动客户端的 Ensure 覆盖共享 BoundIp，先启动者健康探测
         // 即 IpMismatch → 双端 30s 周期互相重建乒乓（Restored 沿重绑映射监听，杀死在途传输——
@@ -211,6 +218,7 @@ public sealed class ScenarioIntegrationTests : IAsyncLifetime
             RelayRetryIntervalOverride = relayRetryInterval,
             StatsIntervalOverride = statsInterval,
             SubnetSurveyOverride = subnetSurvey,
+            LocalIpEnumeratorOverride = localCandidates ? null : EmptyLocalCandidates,
         });
         runtime.Log += m => _output.WriteLine($"[{c.Ip}] {m}");
         await runtime.StartAsync();
@@ -765,6 +773,36 @@ public sealed class ScenarioIntegrationTests : IAsyncLifetime
         // 打洞失败且无回退 → failed（02 §4.5 承载绑定：未开启 → 该设备对全部映射 failed）
         var state = await WaitMappingStateAsync(httpA, "failed", seconds: 40);
         _output.WriteLine($"M2-18|relay-off|state={state}");
+    }
+
+    // ── §5.4 直连优先（2026-10-21）：同网段候选直连——必败拓扑下的唯一活路 ──
+
+    [Fact]
+    public async Task S54_同网段候选直连_预测必miss拓扑仍direct()
+    {
+        // 与 M2_18_回退关 同拓扑（perturbB=2 → TCP 端口预测必 miss、回退关）：映射路径打洞必败；
+        // 开启本机候选后（回环别名=「同网段」fabric），双方直连探测经候选命中 → direct 而非 failed。
+        // 对照组即 M2_18_回退关：同拓扑候选关闭 → failed（红绿互证）。
+        await StartSimulatorAsync(
+            (IPAddress.Parse("127.0.0.4"), UdpNatMode.FullCone),
+            (IPAddress.Parse("127.0.0.5"), UdpNatMode.FullCone), tcpStub: false);
+        await StartTcpSimulatorAsync(perturbB: 2);
+        var group = await CreateGroupAsync();
+        var a = await SeedClientAsync("s54-a", IPAddress.Parse("127.0.0.4"), group, punchConcurrency: 2);
+        var b = await SeedClientAsync("s54-b", IPAddress.Parse("127.0.0.5"), group, punchConcurrency: 2);
+        var httpA = await StartRuntimeAsync(a, localCandidates: true);
+        await StartRuntimeAsync(b, localCandidates: true);
+        await WaitPhaseAsync(httpA, "running");
+        // 无 peers.json 条目：回退关——direct 只能来自候选直连（非中继）
+
+        var echoPort = FreePort();
+        StartEcho(echoPort);
+        var localPort = FreePort();
+        await CreateAndEnableMappingAsync(httpA, (ushort)localPort, b.RemoteCode, (ushort)echoPort);
+
+        var state = await WaitMappingStateAsync(httpA, "direct", seconds: 40);
+        _output.WriteLine($"S54|same-segment|state={state}");
+        await AssertEchoRoundtripAsync(IPAddress.Parse("127.0.0.4"), localPort, RandomGenerator.Bytes(40 * 1024));
     }
 
     [Fact]

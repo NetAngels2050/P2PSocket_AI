@@ -43,6 +43,11 @@ public sealed record ClientRuntimeOptions
     /// 双客户端打洞 socket 须各自绑定内网回环别名；生产 null=Any 全接口）。</summary>
     public IPAddress? PunchBindOverride { get; init; }
 
+    /// <summary>本机直连候选枚举覆盖缝（§5.4，2026-10-21）：生产 null=Puncher 内置真实枚举
+    /// （SubnetSurvey IPv4 滤虚拟网段）；集成测试注入空表保持「跨 NAT 不可直达」前提
+    /// （回环别名 fabric 全互通，不注入则必败场景被候选直连击穿）、注入别名本身驱动同网段用例。</summary>
+    public Func<IPAddress?, IReadOnlyList<IPAddress>>? LocalIpEnumeratorOverride { get; init; }
+
     /// <summary>中继回切重试周期覆盖缝（M2-19）：生产 null=60s（PRD 06 §6/OQ-7 定值，
     /// 非用户可调）；集成测试注入秒级缩短以验证周期触发与回切全链。</summary>
     public TimeSpan? RelayRetryIntervalOverride { get; init; }
@@ -430,13 +435,15 @@ public sealed class ClientRuntime : IAsyncDisposable
         _puncher.Attach(new Puncher(
             // OQ-19/TD-20 punchConcurrency 通路（M2-16 打通）：settings → 0x70 上送（发送时点取当前值，
             // 设置页修改对后续打洞会话生效）；服务端 PunchPolicy.Normalize 校验后经 0x71/0x70 Ack 回填
-            (targetId, trigger, proto, endpoints, ct) => _control.SendRequestAsync<PunchRequestAck>(seq => new PunchRequest(
+            (targetId, trigger, proto, endpoints, localCandidates, ct) => _control.SendRequestAsync<PunchRequestAck>(seq => new PunchRequest(
                 seq, _control.TimestampMs(), MsgType.PunchRequest,
                 targetId, trigger, proto, endpoints,
-                PunchConcurrency: (byte?)_settings.Settings.PunchConcurrency), ct),
-            (sessionId, endpoints, ct) => _control.SendAsync(seq => new PunchEndpoint(
+                PunchConcurrency: (byte?)_settings.Settings.PunchConcurrency,
+                LocalCandidates: localCandidates), ct),
+            (sessionId, endpoints, localCandidates, ct) => _control.SendAsync(seq => new PunchEndpoint(
                 seq, _control.TimestampMs(), MsgType.PunchEndpoint,
-                sessionId, endpoints), ct),
+                sessionId, endpoints,
+                LocalCandidates: localCandidates), ct),
             (socket, ct) => stunEp is null
                 ? throw new IOException("STUN 地址解析失败（服务端主机名不可解析，TD-07 :3478）")
                 : StunProber.ProbeAsync(socket, stunEp, deviceId, deviceSecret, _control.Clock, ct: ct),
@@ -461,7 +468,9 @@ public sealed class ClientRuntime : IAsyncDisposable
             liveRelaySessionLookup: peerId =>
                 _host.Get(peerId) is { ViaRelay: true, IsClosed: false } reused ? reused : null,
             // TCP 打洞诊断日志缝（P4 修复）：计划线+池收尾线——结果线由调度器既有四型日志承载
-            log: m => Log?.Invoke($"[punch-tcp] {m}")));
+            log: m => Log?.Invoke($"[punch-tcp] {m}"),
+            // 本机直连候选枚举缝（§5.4）：生产缺省真实枚举；NatSimulator 场景注入空表/别名
+            localIpEnumerator: _options.LocalIpEnumeratorOverride));
         Log?.Invoke($"打洞器已接线（STUN={stunEp?.ToString() ?? "解析失败"}，派生自控制地址 :3478，TD-07）");
     }
 

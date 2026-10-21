@@ -464,6 +464,8 @@ public sealed record StatsReport(
 /// Ack 由服务端**延后**至被邀请方 0x76 端点就绪才下发（§5.1④）。
 /// punchConcurrency=发起方本地配置 N（1~5 缺省 3，OQ-19/TD-20）——服务端校验后经
 /// 0x71/0x70 Ack 的 PunchCount 统一回填（旧端不携带 → 尾部缺省容忍，02 §7）。
+/// localCandidates=发起方本机直连候选（网卡 IPv4 × 打洞监听口，§5.4 直连优先；
+/// 服务端经 0x71 透传给对端——同网段/对端公网可直达时先直连，旧端不携带同容忍）。
 /// </summary>
 [MessagePackObject]
 public sealed record PunchRequest(
@@ -474,9 +476,11 @@ public sealed record PunchRequest(
     [property: Key(4)] Guid? TriggerMappingId,
     [property: Key(5)] string Proto,
     [property: Key(6)] EndpointPair? RequesterEndpoints,
-    [property: Key(7)] byte? PunchConcurrency) : IPcpMessage;
+    [property: Key(7)] byte? PunchConcurrency,
+    [property: Key(8)] Endpoint[]? LocalCandidates = null) : IPcpMessage;
 
-/// <summary>0x70 S→C（延后 Ack）：被邀请方端点就绪后携带对端信息与端点。</summary>
+/// <summary>0x70 S→C（延后 Ack）：被邀请方端点就绪后携带对端信息与端点；
+/// peerLocalCandidates=被邀请方 0x76 上报的本机直连候选透传（§5.4，旧端缺省容忍）。</summary>
 [MessagePackObject]
 public sealed record PunchRequestAck(
     [property: Key(0)] uint Seq,
@@ -486,9 +490,11 @@ public sealed record PunchRequestAck(
     [property: Key(4)] PeerInfo Peer,
     [property: Key(5)] EndpointPair PeerEndpoints,
     [property: Key(6)] byte PunchCount,
-    [property: Key(7)] bool RelayAllowed) : IPcpMessage;
+    [property: Key(7)] bool RelayAllowed,
+    [property: Key(8)] Endpoint[]? PeerLocalCandidates = null) : IPcpMessage;
 
-/// <summary>0x71 S→C（发往被邀请方）：发起方设备信息+端点；本端需监听的并发路数 N。</summary>
+/// <summary>0x71 S→C（发往被邀请方）：发起方设备信息+端点；本端需监听的并发路数 N；
+/// localCandidates=发起方 0x70 上报的本机直连候选透传（§5.4，旧端缺省容忍）。</summary>
 [MessagePackObject]
 public sealed record PunchInvite(
     [property: Key(0)] uint Seq,
@@ -498,7 +504,8 @@ public sealed record PunchInvite(
     [property: Key(4)] PeerInfo Peer,
     [property: Key(5)] EndpointPair PeerEndpoints,
     [property: Key(6)] byte PunchCount,
-    [property: Key(7)] bool RelayAllowed) : IPcpMessage;
+    [property: Key(7)] bool RelayAllowed,
+    [property: Key(8)] Endpoint[]? LocalCandidates = null) : IPcpMessage;
 
 /// <summary>0x72 打洞结果上报——M1 仅定义编解码，处理属 FR-C-404 → M2。</summary>
 [MessagePackObject]
@@ -511,14 +518,16 @@ public sealed record PunchResult(
     [property: Key(5)] Endpoint? Endpoint,
     [property: Key(6)] string? FailReason) : IPcpMessage;
 
-/// <summary>0x76 C→S：被邀请方回传自己的公网端点（收到 0x71 后即时 STUN 探测）。</summary>
+/// <summary>0x76 C→S：被邀请方回传自己的公网端点（收到 0x71 后即时 STUN 探测）；
+/// localCandidates=本机直连候选（网卡 IPv4 × 打洞监听口，§5.4——经 0x70 Ack 透传给发起方）。</summary>
 [MessagePackObject]
 public sealed record PunchEndpoint(
     [property: Key(0)] uint Seq,
     [property: Key(1)] ulong TimestampMs,
     [property: Key(2)] byte MsgType,
     [property: Key(3)] Guid SessionId,
-    [property: Key(4)] EndpointPair Endpoints) : IPcpMessage;
+    [property: Key(4)] EndpointPair Endpoints,
+    [property: Key(5)] Endpoint[]? LocalCandidates = null) : IPcpMessage;
 
 /// <summary>0x73 PunchRetry：中继回切直连（OQ-7）——C→S 访问方 60s 请求协调新打洞会话 / S→C 服务端通知双端重打；载荷均为原 sessionId。</summary>
 [MessagePackObject]

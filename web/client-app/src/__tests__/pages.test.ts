@@ -285,18 +285,18 @@ describe("Mappings 走查", () => {
     expect(wrapper.findAll('[data-testid="mapping-retry"]').length).toBe(1); // 仅 failed
   });
 
-  it("新建抽屉：remoteCode query 预填 + 保存走 POST 成功入列表", async () => {
+  it("新建抽屉：remoteCode query 预填（下拉显示「设备名（远程码）」）+ 保存走 POST 成功入列表", async () => {
     const state = createDefaultState();
     state.capability = "normal";
     const { wrapper } = await mountPage(Mappings, state, "/mappings?remoteCode=d4e5f6");
 
     await wrapper.find('[data-testid="mappings-new"]').trigger("click");
     await flushPromises();
-    // 抽屉 teleport 到 body；el-input 的透传 attrs（data-testid）落在内部 input 上
+    // 抽屉 teleport 到 body；el-select 透传 attrs（data-testid）落在根 div——选中项显示 label
     const drawer = document.querySelector('[data-testid="mapping-drawer"]');
     expect(drawer).not.toBeNull();
-    const codeInput = drawer!.querySelector("input[data-testid=mapping-remote-code]");
-    expect((codeInput as HTMLInputElement).value).toBe("d4e5f6");
+    const select = drawer!.querySelector('[data-testid="mapping-remote-code"]');
+    expect(select!.textContent).toContain("办公室主机（d4e5f6）");
 
     const nameInput = drawer!.querySelector("input[data-testid=mapping-name]") as HTMLInputElement;
     nameInput.value = "走查新映射";
@@ -306,6 +306,23 @@ describe("Mappings 走查", () => {
     await flushPromises();
 
     expect(wrapper.find('[data-testid="mappings-table"]').text()).toContain("走查新映射");
+  });
+
+  it("新建抽屉：目标远程码下拉「设备名（远程码）」，离线设备可选不禁选", async () => {
+    const state = createDefaultState();
+    state.capability = "normal";
+    const { wrapper } = await mountPage(Mappings, state, "/mappings");
+
+    await wrapper.find('[data-testid="mappings-new"]').trigger("click");
+    await flushPromises();
+
+    // EP select 菜单常驻挂载（persistent）——组件树直查 ElOption props（不必开下拉）
+    const options = wrapper.findAllComponents({ name: "ElOption" });
+    expect(options).toHaveLength(3);
+    const byLabel = Object.fromEntries(options.map((o) => [String(o.props("label")), o]));
+    expect(Object.keys(byLabel)).toContain("办公室主机（d4e5f6）");
+    expect(byLabel["本机（web-dev）（a1b2c3）"]!.props("disabled")).toBe(false);
+    expect(byLabel["家里 NAS（0a1b2c）"]!.props("disabled")).toBe(false); // 离线可选（预建映射口径）
   });
 
   it("停用/启用/删除操作经真实端点生效", async () => {
