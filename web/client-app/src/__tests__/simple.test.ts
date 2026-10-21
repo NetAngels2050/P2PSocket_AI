@@ -109,6 +109,19 @@ describe("简易版·概览", () => {
     expect(rate.text()).toContain("3.0 KiB/s"); // ↑ 2048+1024
     expect(rate.text()).toContain("4.0 KiB/s"); // ↓ 4096+0
   });
+
+  it("关于项目卡（FR-C-812）：介绍/仓库链接/QQ 群可复制/关于页入口", async () => {
+    const { wrapper } = await mountPage(Root, normalState(), "/simple");
+
+    const about = wrapper.find('[data-testid="simple-overview-about"]');
+    expect(about.text()).toContain("关于项目");
+    expect(about.text()).toContain("内网穿透"); // 介绍关键词（projectInfo.ts 同源）
+    const repo = wrapper.find('[data-testid="simple-overview-repo"]');
+    expect(repo.attributes("href")).toBe("https://github.com/bobowire/P2PSocket_AI");
+    expect(wrapper.find('[data-testid="simple-overview-qq"]').text()).toContain("417159195");
+    expect(wrapper.find('[data-testid="simple-overview-about"] .about-link').attributes("href"))
+      .toBe("#/about"); // 更多信息与时间轴 → 高级版关于页
+  });
 });
 
 // ── 端口映射 ───────────────────────────────────────────────────────

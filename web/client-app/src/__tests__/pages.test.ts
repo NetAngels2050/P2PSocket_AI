@@ -15,6 +15,7 @@ import Segments from "../pages/Segments.vue";
 import Settings from "../pages/Settings.vue";
 import Upgrade from "../pages/Upgrade.vue";
 import Wizard from "../pages/Wizard.vue";
+import About from "../pages/About.vue";
 import { createDefaultState } from "../mocks/handlers";
 import { useSystemStore } from "../stores/system";
 import { server, live, mountPage, clickMessageBox } from "./harness";
@@ -804,6 +805,42 @@ describe("Upgrade 走查（M2-29，FR-C-904）", () => {
     const { wrapper } = await mountPage(Upgrade, undefined, "/upgrade");
     expect(wrapper.find('[data-testid="upgrade-reason-alert"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="upgrade-version"]').text()).toContain("0.3.0");
+  });
+});
+
+// ── 关于页（FR-C-812，2026-10-21）─────────────────────────────────
+
+describe("About 走查（FR-C-812）", () => {
+  it("关于卡：项目名/介绍/仓库链接/QQ 群（projectInfo.ts 同源静态数据）", async () => {
+    const { wrapper } = await mountPage(About, undefined, "/about");
+
+    expect(wrapper.find('[data-testid="about-name"]').text()).toBe("AI-P2P");
+    const intro = wrapper.find('[data-testid="about-intro"]');
+    expect(intro.text()).toContain("内网穿透");
+    expect(intro.text()).toContain("打洞直连隧道");
+    const repo = wrapper.find('[data-testid="about-repo"]');
+    expect(repo.attributes("href")).toBe("https://github.com/bobowire/P2PSocket_AI");
+    expect(wrapper.find('[data-testid="about-qq"]').text()).toContain("417159195");
+  });
+
+  it("里程碑时间轴：M1~M4+维护期五节点，收官绿/进行蓝（用户批复汇总口径）", async () => {
+    const { wrapper } = await mountPage(About, undefined, "/about");
+
+    const items = wrapper.findAll('[data-testid="about-milestone"]');
+    expect(items.map((i) => i.find(".ms-title").text())).toEqual([
+      "M1 · 核心链路可用",
+      "M2 · 打洞完整与授权闭环",
+      "M3 · 管理面与可观测",
+      "M4 · 交付打磨",
+      "维护期 · 持续交付",
+    ]);
+    // done=success（M1/M4）、active=primary（M2/M3/维护期）——节点色 class 区分
+    expect(wrapper.findAll('[data-testid="about-milestone"] .el-timeline-item__node--success'))
+      .toHaveLength(2);
+    expect(wrapper.findAll('[data-testid="about-milestone"] .el-timeline-item__node--primary'))
+      .toHaveLength(3);
+    expect(wrapper.find('[data-testid="about-timeline"]').text()).toContain("2026-09-12");
+    expect(wrapper.find('[data-testid="about-timeline"]').text()).toContain("2026-10-11");
   });
 });
 

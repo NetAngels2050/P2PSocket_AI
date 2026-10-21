@@ -4,6 +4,7 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-rou
 // /logs /upgrade M2-29（FR-C-807/904）。
 // FR-C-810 双模式（2026-10-20）：默认入口 / → /simple（简易版顶部 tab 三页），
 // 高级版十页原样可达——仪表盘挪 /dashboard（MENU 同步），其余路径不变。
+// /about 关于页（FR-C-812，2026-10-21）：项目介绍/仓库/QQ 群+里程碑时间轴。
 // routes 独立导出——测试构建隔离路由实例复用同表。
 export const routes: RouteRecordRaw[] = [
   { path: "/", redirect: "/simple" },
@@ -26,6 +27,7 @@ export const routes: RouteRecordRaw[] = [
   { path: "/logs", component: () => import("../pages/Logs.vue") },
   { path: "/settings", component: () => import("../pages/Settings.vue") },
   { path: "/upgrade", component: () => import("../pages/Upgrade.vue") },
+  { path: "/about", component: () => import("../pages/About.vue") },
 ];
 
 export const router = createRouter({

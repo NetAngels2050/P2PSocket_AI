@@ -11,7 +11,7 @@
 import { onMounted, onUnmounted, computed, provide, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
-import { Odometer, Search, Share, Connection, Link, Document, User, Setting, Upload } from "@element-plus/icons-vue";
+import { Odometer, Search, Share, Connection, Link, Document, User, Setting, Upload, InfoFilled } from "@element-plus/icons-vue";
 import { AdminLayout, useWs, ApiPaths } from "@p2p/ui-shared";
 import { useSystemStore } from "./stores/system";
 import { useAuthStore } from "./stores/auth";
@@ -21,6 +21,7 @@ import SubnetConflictBanner from "./components/SubnetConflictBanner.vue";
 
 // 2026-10-20 评估批次 A/C：登录入口"账号"→"账号登录"（U-6）；菜单配图标（V-4）；
 // 仪表盘随双模式挪 /dashboard（原 / 由 /simple 接管默认入口）
+// FR-C-812（2026-10-21）：末位增「关于」页（项目介绍/仓库/QQ 群+里程碑时间轴）
 const MENU = [
   { path: "/dashboard", label: "仪表盘", icon: Odometer },
   { path: "/devices", label: "设备发现", icon: Search },
@@ -31,6 +32,7 @@ const MENU = [
   { path: "/login", label: "账号登录", icon: User },
   { path: "/settings", label: "设置", icon: Setting },
   { path: "/upgrade", label: "升级", icon: Upload },
+  { path: "/about", label: "关于", icon: InfoFilled },
 ];
 
 const system = useSystemStore();

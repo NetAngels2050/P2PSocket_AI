@@ -3,12 +3,15 @@
 // + 映射健康计数卡（失败标红可点 → /simple/mappings 处理）+ 新建映射 CTA。
 // 监控集=用户批复"推荐集"：在线状态/远程码/映射健康计数/实时总速率；虚拟 IP 不在此卡
 // ——以「连接地址 虚拟IP:本地端口」随映射卡呈现（简易版映射页，FR-C-810 调研定稿）。
+// FR-C-812（2026-10-21）：底部增「关于项目」卡——项目介绍/仓库地址/QQ 群（projectInfo.ts
+// 与高级版关于页同源）。
 import { computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { CodeText } from "@p2p/ui-shared";
 import { useSystemStore } from "../../stores/system";
 import { useMappingStore } from "../../stores/mappings";
 import { humanRate } from "../mappingDetail";
+import { PROJECT_DESC, PROJECT_REPO, PROJECT_QQ_GROUP } from "../projectInfo";
 
 const system = useSystemStore();
 const mappings = useMappingStore();
@@ -143,6 +146,46 @@ onMounted(() => {
         一步步引导完成；高级功能（日志/网段/设置等）请切右上角「高级版」
       </p>
     </div>
+
+    <el-card
+      class="about-card"
+      data-testid="simple-overview-about"
+    >
+      <template #header>
+        关于项目
+      </template>
+      <p class="about-desc">
+        {{ PROJECT_DESC }}
+      </p>
+      <div class="about-lines">
+        <span class="muted">仓库地址</span>
+        <el-link
+          type="primary"
+          :href="PROJECT_REPO"
+          target="_blank"
+          data-testid="simple-overview-repo"
+        >
+          {{ PROJECT_REPO }}
+        </el-link>
+      </div>
+      <div class="about-lines">
+        <span class="muted">QQ 群</span>
+        <CodeText
+          :value="PROJECT_QQ_GROUP"
+          label="QQ 群号"
+          data-testid="simple-overview-qq"
+        />
+      </div>
+      <p class="muted about-more">
+        更多信息与项目里程碑时间轴见
+        <RouterLink
+          to="/about"
+          class="about-link"
+        >
+          高级版 · 关于页
+        </RouterLink>
+      </p>
+    </el-card>
   </section>
 </template>
 
@@ -191,4 +234,12 @@ onMounted(() => {
 .ok { color: #34d399; }
 .cta { margin-top: 28px; text-align: center; }
 .cta .muted { margin-top: 8px; }
+/* 关于项目卡（FR-C-812）：深色字面值（本页只在简易版渲染）；玻璃卡底/描边归 simple-tech.css */
+.about-card { margin-top: 28px; }
+.about-desc { margin: 0; line-height: 1.8; color: #cbd5e1; font-size: 13px; }
+.about-lines { margin-top: 12px; display: flex; align-items: center; gap: 10px; }
+.about-lines .muted { font-size: 13px; color: #8aa0bf; }
+.about-more { margin: 14px 0 0; font-size: 12px; color: #8aa0bf; }
+.about-link { color: #67e8f9; text-decoration: none; }
+.about-link:hover { text-shadow: 0 0 10px rgba(34, 211, 238, 0.5); }
 </style>
