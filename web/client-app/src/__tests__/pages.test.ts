@@ -826,7 +826,7 @@ describe("About 走查（FR-C-812）", () => {
     expect(wrapper.find('[data-testid="about-qq"]').text()).toContain("417159195");
   });
 
-  it("里程碑时间轴：M1~M4+维护期五节点，收官绿/进行蓝（用户批复汇总口径）", async () => {
+  it("里程碑时间轴：M1~M5+维护期六节点，收官绿/进行蓝（用户批复汇总口径，M5 随立项补入）", async () => {
     const { wrapper } = await mountPage(About, undefined, "/about");
 
     const items = wrapper.findAll('[data-testid="about-milestone"]');
@@ -836,14 +836,16 @@ describe("About 走查（FR-C-812）", () => {
       "M3 · 管理面与可观测",
       "M4 · 交付打磨",
       "维护期 · 持续交付",
+      "M5 · 安全加固",
     ]);
-    // done=success（M1/M4）、active=primary（M2/M3/维护期）——节点色 class 区分
+    // done=success（M1/M4）、active=primary（M2/M3/维护期/M5）——节点色 class 区分
     expect(wrapper.findAll('[data-testid="about-milestone"] .el-timeline-item__node--success'))
       .toHaveLength(2);
     expect(wrapper.findAll('[data-testid="about-milestone"] .el-timeline-item__node--primary'))
-      .toHaveLength(3);
+      .toHaveLength(4);
     expect(wrapper.find('[data-testid="about-timeline"]').text()).toContain("2026-09-12");
     expect(wrapper.find('[data-testid="about-timeline"]').text()).toContain("2026-10-11");
+    expect(wrapper.find('[data-testid="about-timeline"]').text()).toContain("安全加固");
   });
 });
 

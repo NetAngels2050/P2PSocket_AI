@@ -2,7 +2,8 @@
 // 关于页（FR-C-812，2026-10-21）：项目介绍/仓库地址/QQ 群 + 项目里程碑时间轴。
 // 纯静态展示页（数据源 projectInfo.ts，与简易版概览关于卡同源）——无 API 调用、
 // 哑节点无写操作（同 /logs /upgrade 只读页，passive 亦可达）。时间轴粒度=用户批复
-// 口径：M1~M4 四条+维护期汇总一条（done=success 绿收官 / active=primary 蓝进行）。
+// 口径：每里程碑一条+维护期汇总一条（M1~M5+维护期共六节点，M5 随立项 2026-10-21 补入；
+// done=success 绿收官 / active=primary 蓝进行）。
 import { CodeText } from "@p2p/ui-shared";
 import {
   PROJECT_NAME,
