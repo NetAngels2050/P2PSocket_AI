@@ -8,7 +8,7 @@
 
 | 项 | 值 |
 |---|---|
-| 程序目录 | 形态 A=`C:\Program Files\P2PClient`；形态 B=任意无空格目录（如 `D:\P2PClient`） |
+| 程序目录 | 形态 A=`C:\Program Files\P2PSocketClient`；形态 B=任意无空格目录（如 `D:\P2PClient`） |
 | 数据目录 | `C:\ProgramData\P2PClient`（settings.json/state.json/logs——**程序目录外，升级天然保留**） |
 | Windows 服务 | `P2PClient`（LocalSystem——需加载 Wintun 驱动；开机自启+崩溃 5s×3 档自愈 FR-C-902） |
 | 本地 Web/向导 | `http://127.0.0.1:7100`（**仅回环**，无需开防火墙端口） |
@@ -23,7 +23,10 @@
 # 构建机：需 Inno Setup 6（ISCC；winget install JRSoftware.InnoSetup）
 # Wintun.dll 置于 out/wintun/Wintun.dll（官方 wintun.net 0.14.1，不入库——缺则脚本警告手工放置）
 sh build/package.sh win-setup
-# 产物：out/P2PClient-Setup-1.0.0-x64.exe（~36MB）
+# 产物：out/P2PSocket-Client-Setup-1.0.0-x64.exe（~36MB）
+# 命名口径（2026-10-21，设计 v1.65）：安装器 AppName=P2PSocket 客户端、安装目录 P2PSocketClient、
+#   开始菜单组「P2PSocket 客户端」；服务名 P2PClient 与数据目录 %ProgramData%\P2PClient 刻意不改
+#   （AppId 不变=同应用，覆盖升级沿用旧安装目录）。
 ```
 
 > 安装包未做代码签名：首次运行 Windows SmartScreen 可能弹"未知发布者"——「更多信息→仍要运行」。
@@ -32,19 +35,19 @@ sh build/package.sh win-setup
 
 双击 Setup exe → UAC 确认 → 完成。安装器自动完成：
 
-1. 全量落位 `%ProgramFiles%\P2PClient`（exe+wwwroot+Wintun.dll+端点清单）；
+1. 全量落位 `%ProgramFiles%\P2PSocketClient`（exe+wwwroot+Wintun.dll+端点清单）；
 2. 创建数据目录 `%ProgramData%\P2PClient` 并设 ACL（SYSTEM/Administrators 完全控制；卸载不删数据）；
 3. 创建并启动服务 `P2PClient`（sc create：binPath/start=auto/DisplayName/failure reset=86400 actions=restart/5000×3，与手工脚本逐参一致）；
-4. 开始菜单「P2P Client → Web 管理页」快捷方式（`http://127.0.0.1:7100`）。
+4. 开始菜单「P2PSocket 客户端 → Web 管理页」快捷方式（`http://127.0.0.1:7100`）。
 
 安装后打开 `http://127.0.0.1:7100/wizard` 走首启向导（服务端地址 `<IP>:7000` → 注册 → 虚拟网卡 100.64.0.2 出现即就绪）。
 
 ### 1.3 静默安装/卸载（批量部署）
 
 ```bat
-P2PClient-Setup-1.0.0-x64.exe /VERYSILENT /SUPPRESSMSGBOXES     :: 静默安装（服务照装照启）
-"C:\Program Files\P2PClient\unins000.exe" /VERYSILENT           :: 静默卸载（数据目录默认保留）
-"C:\Program Files\P2PClient\unins000.exe" /VERYSILENT /PURGE    :: 静默卸载并删数据目录
+P2PSocket-Client-Setup-1.0.0-x64.exe /VERYSILENT /SUPPRESSMSGBOXES     :: 静默安装（服务照装照启）
+"C:\Program Files\P2PSocketClient\unins000.exe" /VERYSILENT           :: 静默卸载（数据目录默认保留）
+"C:\Program Files\P2PSocketClient\unins000.exe" /VERYSILENT /PURGE    :: 静默卸载并删数据目录
 ```
 
 ### 1.4 升级与卸载

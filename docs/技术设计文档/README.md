@@ -1,6 +1,6 @@
 # P2P 内网穿透产品 · 技术设计文档
 
-> 版本：v1.64　创建日期：2026-08-19　状态：待评审
+> 版本：v1.65　创建日期：2026-08-19　状态：待评审
 > 依据：[产品需求文档 PRD v0.11](../prd/README.md)（决策 D1~D21，D3 经 v0.4 修订；开放问题 OQ-1~OQ-19 已全部决议）
 > 定位：开发阶段的**施工图纸**——所有实现以本文档为准；与 PRD 冲突时以 PRD 为准并提出修订。
 
@@ -140,3 +140,4 @@
 | 2026-10-20 | v1.62 | **简易版科技感皮肤（用户指令"简易版要有科技感"——FR-C-810"时尚性"实现层，纯前端零协议/端点变更）**：06 §1.1 新增简易版科技感皮肤小节——简易版专属深色霓虹视觉与高级版浅色并存，SimpleLayout 挂载期给 `<html>` 加 `dark`（EP 官方 dark/css-vars.css，html.dark 作用域全局兜底含 teleport 弹层）+`simple-tech`（新 layouts/simple-tech.css，html.simple-tech 全限定：深蓝黑 #070b14+44px 微网格+径向光晕 body 底、el-card 玻璃卡+顶部霓虹线+失败红系、主按钮青蓝渐变发光[plain 幽灵态、EP hover 只改 background-color 故三态并声明渐变]、.dot.on 呼吸脉冲+reduced-motion 降级、码胶囊等宽、--tech-* 令牌）双类、卸载期摘除即还原浅色；页面 scoped 直接深色字面值（简易版页面单态渲染）、速率/计数大数字等宽+青色辉光、顶栏毛玻璃+渐变分割线+品牌渐变文字+tab 内发光下划线；页面 .dot scoped 副本删除归一 shared.css；**全站深色模式仍为暂缓项**；06 §1 工程树补 simple-tech.css 行；测试 +1（html 主题类挂卸还原）；用户手册 v1.6 |
 | 2026-10-21 | v1.63 | **打洞直连优先·候选地址交换落地（NET-76，PRD v0.10；用户需求"打洞前先判断两机可否 IP 直连"，批复=并行竞赛非串行两阶段）**：02 §2.4 0x70/0x71/0x76/Ack 四行补 localCandidates/peerLocalCandidates 可选字段（服务端纯存转零解析；尾部可空缺省容忍——旧端 133102 混布不打断，punchConcurrency 先例）+新增 **02 §5.4**（候选构造口径[BindAddress 单值/SubnetSurvey 快照滤 100.64/10 虚拟段去重上限 8/异常降级空集]、UDP 扇出+pin-on-receive 回程钉定、TCP directTargets=[映射端点偏移 0 ∪ 候选]+250ms 拒连重试+DirectRefused 与 FailedConnects 分账+onConnection 移入 AddConnection 使 accept 侧即时扇出、预测 connect 先发直连探测后发的顺序约束、ClientRuntimeOptions.LocalIpEnumeratorOverride 测试缝）；02 §5.1/§5.2 增直连优先引注；05 §3/§5 同步；07 本机地址披露注记；09 测试口径；10 追溯矩阵 NET-76 行；高级版 /mappings 目标远程码改设备下拉（FR-C-810 既有能力内 UI 形态统一，离线可选不禁选——06 §2 注记）；PRD 06 §3/§4/§7 + README v0.10；用户手册连接原理一句带过 |
 | 2026-10-21 | v1.64 | **项目说明信息展示落地（FR-C-812，PRD v0.11；用户需求两则——①简易版首页增项目介绍/仓库地址/QQ 群[417159195] ②高级版增关于页含里程碑时间轴；纯前端静态展示，协议/端点零变更）**：06 §1 工程树补 pages/About.vue+pages/projectInfo.ts；06 §2 路由表 /about 行+概览行补关于卡；v1.64 落地注记（同源常量层 projectInfo.ts 防两处文案漂移、时间轴粒度=M1~M4+维护期汇总五节点用户批复[状态演进需随版手改 projectInfo.ts]、文案取根 README §1/git remote https 形式、MENU 末位「关于」InfoFilled 9→10 项）；10 追溯矩阵 FR-C-812 行；用户手册 v1.8（§1.5.1 关于卡+§6.8 关于页+§0.3 对照表行） |
+| 2026-10-21 | v1.65 | **品牌命名口径修订（FR-C-812 修订，PRD v0.12；用户指令三则——介绍改"基于 P2PSocket 的 AI 重构"并放原项目地址 / 称谓 P2PSocket 客户端·服务端 / 打包名 P2PSocket-*）**：06 v1.65 落地注记（projectInfo.ts 名/介绍/PROJECT_ORIGIN_REPO[关于卡+关于页双展示]、称谓三处、测试断言随更）；06 §1/§2 相关行标注 v1.65 修订；08 §3.1 交付物名 P2PSocket-Client-Setup-{ver}-x64.exe（iss 更名 P2PSocket-Client.iss、AppName/目录/菜单组/服务显示名同步，服务名 P2PClient 与数据目录刻意不动）+archive 分发名前缀 P2PSocket-（server/client-linux tar）；10 追溯矩阵 FR-C-812 行补修订注记；用户手册 v1.9；docs/deploy 打包说明与三份部署手册产物名随更 |

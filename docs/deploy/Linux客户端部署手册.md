@@ -70,9 +70,9 @@ sudo rpm -e p2p-client                              # 卸载（rpm 无 purge 两
 
 ```bash
 # 构建机
-sh build/package.sh client-linux        # out/client-linux/p2p-client-linux-v1.0.0.tar.gz
+sh build/package.sh client-linux        # out/client-linux/P2PSocket-client-linux-v1.0.0.tar.gz
 # 目标机
-sudo mkdir -p /opt/p2p/client && sudo tar -C /opt/p2p/client -xzf p2p-client-linux-v1.0.0.tar.gz
+sudo mkdir -p /opt/p2p/client && sudo tar -C /opt/p2p/client -xzf P2PSocket-client-linux-v1.0.0.tar.gz
 sudo chmod +x /opt/p2p/client/p2p-client
 # systemd 单元：参考 deploy/client/p2p-client.service（ExecStart 按实际部署位改）：
 sudo tee /etc/systemd/system/p2p-client.service <<'EOF'
