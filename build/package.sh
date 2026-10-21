@@ -30,9 +30,9 @@ publish() { # $1=项目路径 $2=RID $3=产物目录名
   test -f "out/$3/wwwroot/index.html" || { echo "产物校验失败：out/$3/wwwroot/index.html 缺失（前端未构建？）"; exit 1; }
 }
 
-archive() { # $1=产物目录名（Linux 分发形态 tar.gz）
-  echo "==> 归档 out/$1 → out/p2p-$1-v$VERSION.tar.gz"
-  tar -czf "out/p2p-$1-v$VERSION.tar.gz" -C "out/$1" .
+archive() { # $1=产物目录名（Linux 分发形态 tar.gz；分发名前缀 P2PSocket-，2026-10-21 命名口径）
+  echo "==> 归档 out/$1 → out/P2PSocket-$1-v$VERSION.tar.gz"
+  tar -czf "out/P2PSocket-$1-v$VERSION.tar.gz" -C "out/$1" .
 }
 
 want() { echo "$TARGET" | grep -qw "$1"; } # all 含全部目标
@@ -71,10 +71,10 @@ run_win_setup() { # M4-02：Inno Setup 安装包（依赖 client-win 产物；IS
     ISCC="$LOCALAPPDATA/Programs/Inno Setup 6/ISCC.exe"
   fi
   if [ -f "$ISCC" ]; then
-    echo "==> ISCC 编译 P2PClient.iss → out/P2PClient-Setup-$VERSION-x64.exe"
-    "$ISCC" //DPkgVersion="$VERSION" deploy/client/win/P2PClient.iss || { echo "ISCC 编译失败"; exit 1; }
-    test -f "out/P2PClient-Setup-$VERSION-x64.exe" \
-      || { echo "产物校验失败：out/P2PClient-Setup-$VERSION-x64.exe 缺失"; exit 1; }
+    echo "==> ISCC 编译 P2PSocket-Client.iss → out/P2PSocket-Client-Setup-$VERSION-x64.exe"
+    "$ISCC" //DPkgVersion="$VERSION" deploy/client/win/P2PSocket-Client.iss || { echo "ISCC 编译失败"; exit 1; }
+    test -f "out/P2PSocket-Client-Setup-$VERSION-x64.exe" \
+      || { echo "产物校验失败：out/P2PSocket-Client-Setup-$VERSION-x64.exe 缺失"; exit 1; }
     STATUS="$STATUS win-setup(v$VERSION)"
   else
     echo "警告：ISCC.exe 不存在（Inno Setup 6 未安装，winget install JRSoftware.InnoSetup）——"

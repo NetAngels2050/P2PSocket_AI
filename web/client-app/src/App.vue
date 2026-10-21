@@ -102,7 +102,7 @@ onUnmounted(() => {
   <RouterView v-if="bare || simpleMode" />
   <AdminLayout
     v-else
-    title="P2P 客户端"
+    title="P2PSocket 客户端"
     :menu="MENU"
     :alert="alert"
   >

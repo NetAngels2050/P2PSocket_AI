@@ -3,16 +3,19 @@
 // 介绍文案基于根 README §1 口径；里程碑数据取根 README §6/任务清单索引
 // （用户批复粒度：M1~M4 四条+维护期汇总一条，不随维护活动逐条展开）。
 
-export const PROJECT_NAME = "AI-P2P";
+export const PROJECT_NAME = "P2PSocket_AI";
 
 export const PROJECT_DESC =
-  "自部署的 P2P 内网穿透产品：把一台设备（服务方）上的内网服务，" +
-  "经 P2P 打洞直连隧道暴露给另一台设备（访问方）。访问方连接 虚拟IP:本地端口，" +
+  "基于开源项目 P2PSocket 的 AI 重构产品。自部署的 P2P 内网穿透：把一台设备（服务方）" +
+  "上的内网服务，经 P2P 打洞直连隧道暴露给另一台设备（访问方）。访问方连接 虚拟IP:本地端口，" +
   "流量经端到端加密隧道直达对端，无需公网中转；打洞失败时自动回退内置中继。" +
   "控制面集中、数据面 P2P，业务流量不经过服务端。基于 .NET 10 + Vue 3 构建。";
 
-/** 仓库地址（git remote https 形式）。 */
+/** 本仓库地址（git remote https 形式）。 */
 export const PROJECT_REPO = "https://github.com/bobowire/P2PSocket_AI";
+
+/** 原项目（AI 重构基础）仓库地址，用户需求原文。 */
+export const PROJECT_ORIGIN_REPO = "https://github.com/bobowire/Wireboy.Socket.P2PSocket";
 
 /** 用户交流 QQ 群（用户需求原文）。 */
 export const PROJECT_QQ_GROUP = "417159195";

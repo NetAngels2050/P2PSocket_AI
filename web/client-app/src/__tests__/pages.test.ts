@@ -811,15 +811,18 @@ describe("Upgrade 走查（M2-29，FR-C-904）", () => {
 // ── 关于页（FR-C-812，2026-10-21）─────────────────────────────────
 
 describe("About 走查（FR-C-812）", () => {
-  it("关于卡：项目名/介绍/仓库链接/QQ 群（projectInfo.ts 同源静态数据）", async () => {
+  it("关于卡：项目名/介绍（AI 重构口径）/仓库链接/原项目链接/QQ 群（projectInfo.ts 同源静态数据）", async () => {
     const { wrapper } = await mountPage(About, undefined, "/about");
 
-    expect(wrapper.find('[data-testid="about-name"]').text()).toBe("AI-P2P");
+    expect(wrapper.find('[data-testid="about-name"]').text()).toBe("P2PSocket_AI");
     const intro = wrapper.find('[data-testid="about-intro"]');
+    expect(intro.text()).toContain("AI 重构");
     expect(intro.text()).toContain("内网穿透");
     expect(intro.text()).toContain("打洞直连隧道");
     const repo = wrapper.find('[data-testid="about-repo"]');
     expect(repo.attributes("href")).toBe("https://github.com/bobowire/P2PSocket_AI");
+    const originRepo = wrapper.find('[data-testid="about-origin-repo"]');
+    expect(originRepo.attributes("href")).toBe("https://github.com/bobowire/Wireboy.Socket.P2PSocket");
     expect(wrapper.find('[data-testid="about-qq"]').text()).toContain("417159195");
   });
 

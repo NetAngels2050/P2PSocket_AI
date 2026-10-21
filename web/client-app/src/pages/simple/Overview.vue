@@ -11,7 +11,7 @@ import { CodeText } from "@p2p/ui-shared";
 import { useSystemStore } from "../../stores/system";
 import { useMappingStore } from "../../stores/mappings";
 import { humanRate } from "../mappingDetail";
-import { PROJECT_DESC, PROJECT_REPO, PROJECT_QQ_GROUP } from "../projectInfo";
+import { PROJECT_DESC, PROJECT_REPO, PROJECT_ORIGIN_REPO, PROJECT_QQ_GROUP } from "../projectInfo";
 
 const system = useSystemStore();
 const mappings = useMappingStore();
@@ -166,6 +166,17 @@ onMounted(() => {
           data-testid="simple-overview-repo"
         >
           {{ PROJECT_REPO }}
+        </el-link>
+      </div>
+      <div class="about-lines">
+        <span class="muted">原项目</span>
+        <el-link
+          type="primary"
+          :href="PROJECT_ORIGIN_REPO"
+          target="_blank"
+          data-testid="simple-overview-origin-repo"
+        >
+          {{ PROJECT_ORIGIN_REPO }}
         </el-link>
       </div>
       <div class="about-lines">

@@ -45,7 +45,7 @@ onUnmounted(() => dashboard.stopPolling());
   <RouterView v-if="bare" />
   <AdminLayout
     v-else
-    title="P2P 管理后台"
+    title="P2PSocket 服务端"
     :menu="MENU"
   >
     <template #header>

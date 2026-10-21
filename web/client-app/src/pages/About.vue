@@ -8,6 +8,7 @@ import {
   PROJECT_NAME,
   PROJECT_DESC,
   PROJECT_REPO,
+  PROJECT_ORIGIN_REPO,
   PROJECT_QQ_GROUP,
   MILESTONES,
 } from "./projectInfo";
@@ -44,6 +45,16 @@ import {
             data-testid="about-repo"
           >
             {{ PROJECT_REPO }}
+          </el-link>
+        </el-descriptions-item>
+        <el-descriptions-item label="原项目（AI 重构基础）">
+          <el-link
+            type="primary"
+            :href="PROJECT_ORIGIN_REPO"
+            target="_blank"
+            data-testid="about-origin-repo"
+          >
+            {{ PROJECT_ORIGIN_REPO }}
           </el-link>
         </el-descriptions-item>
         <el-descriptions-item label="QQ 群">

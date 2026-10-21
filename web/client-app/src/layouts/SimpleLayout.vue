@@ -42,7 +42,7 @@ onBeforeUnmount(() => document.documentElement.classList.remove("dark", "simple-
           to="/simple"
           class="brand"
         >
-          P2P 客户端
+          P2PSocket 客户端
         </RouterLink>
         <nav class="tabs">
           <RouterLink

@@ -1,8 +1,13 @@
 ; M4-02 Windows 客户端安装包脚本（NFR-32、设计 08 §3.1、FR-C-901/902）
-; 编译：ISCC /DPkgVersion=1.0.0 deploy\client\win\P2PClient.iss（package.sh win-setup 目标自动传版本）
+; 2026-10-21 命名口径修订（用户指令）：显示名/产物名统一 P2PSocket 品牌——AppName=P2PSocket 客户端、
+;   Setup 产物 P2PSocket-Client-Setup-{ver}-x64.exe、安装目录 {autopf}\P2PSocketClient、开始菜单组
+;   「P2PSocket 客户端」、服务显示名 P2PSocket 客户端。**服务名 P2PClient 与数据目录
+;   %ProgramData%\P2PClient 刻意不动**——已装机覆盖升级与数据保留依赖二者（AppId 不变=同应用，
+;   升级沿用旧安装目录）。
+; 编译：ISCC /DPkgVersion=1.0.0 deploy\client\win\P2PSocket-Client.iss（package.sh win-setup 目标自动传版本）
 ;   —— 版本单一事实源=src/Directory.Build.props（package.sh 提取经 /D 传入；直跑 ISCC 用下方 #ifndef 兜底）
-; 产物：out/P2PClient-Setup-{ver}-x64.exe
-; 安装：复制 out/client-win 产物 → %ProgramFiles%\P2PClient；创建 P2PClient 服务（LocalSystem/自启/
+; 产物：out/P2PSocket-Client-Setup-{ver}-x64.exe
+; 安装：复制 out/client-win 产物 → %ProgramFiles%\P2PSocketClient；创建 P2PClient 服务（LocalSystem/自启/
 ;   崩溃 5s×3 档恢复，参数对齐 deploy/client/install-windows-service.ps1 已验证口径）并启动；
 ;   数据目录 %ProgramData%\P2PClient ACL=SYSTEM+Administrators；开始菜单 Web 入口（127.0.0.1:7100）。
 ; 升级：覆盖安装——检测既有服务先停（等退出释放句柄）→ 覆盖文件 → 重启服务；%ProgramData% 数据保留。
@@ -20,19 +25,19 @@
 
 [Setup]
 AppId={{D2762F4B-9E8A-4C71-9A05-7B3E1D4F5A68}
-AppName=P2P Client
+AppName=P2PSocket 客户端
 AppVersion={#PkgVersion}
-AppPublisher=P2P
-DefaultDirName={autopf}\P2PClient
+AppPublisher=P2PSocket_AI
+DefaultDirName={autopf}\P2PSocketClient
 DisableProgramGroupPage=yes
 OutputDir=..\..\..\out
-OutputBaseFilename=P2PClient-Setup-{#PkgVersion}-x64
+OutputBaseFilename=P2PSocket-Client-Setup-{#PkgVersion}-x64
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayName=P2P Client {#PkgVersion}
+UninstallDisplayName=P2PSocket 客户端 {#PkgVersion}
 
 [Files]
 ; 全量镜像 publish 产物（wwwroot 递归；pdb 调试符号不分发）
@@ -47,7 +52,7 @@ Name: "{commonappdata}\P2PClient"; Permissions: system-full admins-full; Flags: 
 
 [Icons]
 ; Web 管理入口（04 §0：仅回环监听，浏览器本机可达）
-Name: "{autoprograms}\P2P Client\Web 管理页"; Filename: "http://127.0.0.1:7100"
+Name: "{autoprograms}\P2PSocket 客户端\Web 管理页"; Filename: "http://127.0.0.1:7100"
 
 [Code]
 const
@@ -119,7 +124,7 @@ begin
   else
   begin
     ExePath := ExpandConstant('{app}\p2p-client.exe');
-    if not ScRun(Format('create %s binPath= "%s" start= auto DisplayName= "P2P Client"', [ServiceName, ExePath])) then
+    if not ScRun(Format('create %s binPath= "%s" start= auto DisplayName= "P2PSocket 客户端"', [ServiceName, ExePath])) then
     begin
       Log('sc create 失败——请手工执行 install-windows-service.ps1');
       Exit;
