@@ -1,7 +1,7 @@
 # 04 · API 接口设计
 
 > 所属文档集：[README](README.md)
-> 两个独立 HTTP 端点：**客户端本地 API**（127.0.0.1:7100，无鉴权，TD-12）与**服务端 Web API**（127.0.0.1:7500，Cookie 会话）。
+> 两个独立 HTTP 端点：**客户端本地 API**（127.0.0.1:7100，**请求 token 鉴权**——v1.67/M5 修订，SEC-82/FR-C-813；TD-12 的「无鉴权」旧口径废止）：载体=REST `Authorization: Bearer` / WS 与自动打开 URL `?token=`，静态资源豁免，07 §14.2）与**服务端 Web API**（127.0.0.1:7500，Cookie 会话 + IP 黑名单中间件前置[认证之前，07 §13.3]）。
 > 服务端业务数据（注册/分组/映射/信令）**不经 HTTP**，全部走客户端本地 API → 控制协议转发（TD-08）。
 
 ## 1. 通用约定
@@ -12,6 +12,8 @@
 - 本地 API 跨域：仅允许同源（SPA 由同端口静态托管），无 CORS 需求。
 
 ## 2. 客户端本地 API（127.0.0.1:7100）
+
+> **token 鉴权（v1.67/M5，SEC-82，M5-12）**：token=32B CSPRNG hex，服务启动生成、随服务重启轮换、落 ACL 文件 `web-token`（Windows 数据目录 ACL/Linux 0600，07 §14.2）；REST=`Authorization: Bearer`、WS 与自动打开 URL=`?token=`（SPA 读取后转存 sessionStorage）；未携带/错误 → REST 401{2001}、WS 升级请求 401；静态资源豁免（保护目标=API 动作面）。
 
 ### 2.1 系统与设备
 
@@ -130,8 +132,12 @@ Cookie：`HttpOnly, SameSite=Strict`（无 Secure——HTTP，D11）；会话服
 | GET | `/api/group-requests?status=pending` · POST `/api/group-requests/{id}/approve` · `/reject` | 审批队列（服务端 Web 侧，FR-S-305 与客户端 0x53 同语义） | FR-S-305/822 |
 | GET | `/api/mappings` | 全部映射配置与状态（只读）。**状态=TD-22 投影口径（v1.40）**：0x62 mapping_status 审计流水每映射最新一条（direct/relay/failed）为"最后已知状态"——客户端状态机是真相源（M2-08），服务端管理面仅流水投影；无流水行（长期离线）=unknown。累计流量 join mapping_stats。M3-08 落地编制补充：归属设备名/远程码/对端设备名子查询 join；`?deviceId=`（归属设备）与 `?status=`（投影态）过滤；disabled 映射仍投影最后已知流水（enabled 独立字段供前端置灰——分布的 enabled 限定是仪表盘聚合口径，列表为逐映射明细口径）；投影核与仪表盘共用 AdminDashboardApi.LatestStatusByMappingAsync | FR-S-823 |
 | GET | `/api/relay/sessions` · PUT `/api/relay/config` | 中继会话列表；全局开关/限速。**限速语义=TD-23（v1.40）**：relay_rate_limit=全局字节速率令牌桶作用于中继转发发送路径（UDP+TCP 双承载，0=不限）；令牌耗尽时**新** 0x74 分配拒绝（5002，保护存量会话仅降速）；SignalingCoordinator relayAllowed 合成接入余量判定（M2-07"限速余量恒真"收口）。M3-07 落地编制补充 GET `/api/relay/config`（读现值，管理页表单回显用）；sid/端点承载表达详见 05 §6.2 | FR-S-824 |
-| GET | `/api/system/config` · PUT | server_config 键值读写（**白名单键集=ConfigDefaults 全集**：业务开关在库，listen.* 进程级在 appsettings 不属此端——08 §5.1 分工；值校验 log_level 枚举/数值范围/virtual_subnet CIDR/public_addr IP 或域名，未覆盖键取种子值，FR-S-825）。M3-08 落地编制补充：GET 逐键标注 restartRequired（启动期一次性读取的键 true：public_addr/stun_*/log_level，其余运行期现读即时生效）；PUT 全量校验先行（任一键非法整单拒绝 400 {1001} 不留半更新）+审计 system_config_change+log_level 存规范形态；relay_rate_limit 进程内直调 RelayRateLimiter.UpdateRate 即时生效（与 PUT /api/relay/config 同执行链——两条写路径共享限速热路径不漂移） | FR-S-825 |
-| GET | `/api/audit-logs?event=&page=` | 审计日志（NFR-54）。M3-08 落地编制补充：newest-first（自增 Id 降序）+事件精确过滤+分页（pageSize 默认 20、clamp 1~100）；detail 为原始 JSON 文本透传（前端格式化展示，SEC-51 写入侧已保证不含凭据材料） | NFR-54 |
+| GET | `/api/system/config` · PUT | server_config 键值读写（**白名单键集=ConfigDefaults 全集**：业务开关在库，listen.* 进程级在 appsettings 不属此端——08 §5.1 分工；值校验 log_level 枚举/数值范围/virtual_subnet CIDR/public_addr IP 或域名，未覆盖键取种子值，FR-S-825）。M3-08 落地编制补充：GET 逐键标注 restartRequired（启动期一次性读取的键 true：public_addr/stun_*/log_level，其余运行期现读即时生效）；PUT 全量校验先行（任一键非法整单拒绝 400 {1001} 不留半更新）+审计 system_config_change+log_level 存规范形态；relay_rate_limit 进程内直调 RelayRateLimiter.UpdateRate 即时生效（与 PUT /api/relay/config 同执行链——两条写路径共享限速热路径不漂移）。v1.67/M5：安全键随 ConfigDefaults 扩充自动入白名单（device_registration_open/register_rate_per_ip/login_fail_window_sec/login_delay_cap_ms/autoban_*/control_conn_*/relay_join_rate_per_ip/alert_*/update_artifact_sha256；web_max_connections 标注 restartRequired[Kestrel 启动期设定]）；**隐藏键 ip_blacklist 不在白名单**（编辑面=/api/security/blacklist，07 §13.3）；update_artifact_sha256 值校验=JSON 对象{产物名→64 位小写 hex}；update_url 值校验**仅接受 https:// 或空**（SEC-84，存量 http 值运行时屏蔽口径见 07 §14.4） | FR-S-825 |
+| GET | `/api/audit-logs?event=&page=` | 审计日志（NFR-54）。M3-08 落地编制补充：newest-first（自增 Id 降序）+事件精确过滤+分页（pageSize 默认 20、clamp 1~100）；detail 为原始 JSON 文本透传（前端格式化展示，SEC-51 写入侧已保证不含凭据材料）。M5 新事件族（v1.67）：register_deny/login_throttled/ip_block/ip_unblock/ip_auto_block/security_lockdown（07 §5/§11/§13） | NFR-54 |
+| GET | `/api/security/overview` | **安全中心聚合（v1.67/M5，SEC-72/FR-S-827，M5-09）**：今日/近 7 天登录失败（login_failed+admin_login_fail）/新注册（register+register_recover）/授权拒绝族（punch_deny+mapping_deny+passive_deny+group_join_deny）计数——数据血缘=audit_logs 时间窗聚合（与审计查询同口径）+ STUN 丢弃三分桶（StunGuard 进程累计，卡片如实标注「自启动累计」）+ 黑名单快照与自动封禁规则现值（07 §13.2/§13.3） | FR-S-827 |
+| POST | `/api/security/blacklist` · DELETE `/api/security/blacklist/{ip}` | IP 黑名单手动加黑（`{ip, reason?}`，manual 条目永久）/解封（07 §13.3 四面接入；审计 ip_block/ip_unblock） | FR-S-828 |
+| POST | `/api/security/alert-test` | 立即向已配置 webhook 发送 type=test 告警载荷（07 §13.1） | FR-S-826 |
+| POST | `/api/security/lockdown` | 踢全部会话：断开全部在线 ControlSession（reason=security_lockdown）+审计；**不设拒连窗**（口径与理由见 07 §13.4） | FR-S-827 |
 
 ## 4. 实时与统计的数据流
 
@@ -159,10 +165,11 @@ Cookie：`HttpOnly, SameSite=Strict`（无 Secure——HTTP，D11）；会话服
 | 4003 | REMOTE_CODE_INVALID | 远程码不存在/已重置 |
 | 4004 | DEVICE_ACTIVE | 同 mac_code 重注册但原设备在线（防伪造 MAC 抢注，OQ-14；需管理员解绑后重试） |
 | 4005 | TARGET_OFFLINE | 打洞目标设备离线/邀请不可达（OQ-18；发起方映射立即 failed，不等超时） |
+| 4006 | REGISTRATION_DENIED | 设备注册被拒（**三重闸门统一应答**：开关关/单 IP 频控/总量超限，对外不区分拒因防探测枚举——拒因维度仅入审计 register_deny[switch\|rate\|quota]；07 §5.1，v1.67/M5/SEC-61。注：2004 保持「账号注册开关」专属语义不复用） |
 | 5001 | PUNCH_FAILED | 打洞失败（含细分 reason） |
 | 5002 | RELAY_DISABLED | 服务端中继关闭 |
 | 5003 | SERVER_UNREACHABLE | 控制通道断开 |
-| 5004 | VERSION_NOT_SUPPORTED | 协议不兼容（触发升级引导） |
+| 5004 | VERSION_NOT_SUPPORTED | 协议不兼容（触发升级引导）。v1.67/M5 复用：登录族明文拒绝——0x20/0x21/0x23 passwordBox 缺失或明文字段非空、0x10 携带 password 字段 → 5004（httpLikeMsg=`password_ecies_required`），OQ-21① 硬切无明文双轨，07 §10.3 |
 | 5005 | TIME_SKEW | 时间戳超 ±120s 窗口（OQ-12；附 serverTs，客户端重算 offset 后重试一次） |
 
 ## 6. API 演进约定
