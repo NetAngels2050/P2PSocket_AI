@@ -3,6 +3,7 @@
 // 基架（server/live/mountPage/clickMessageBox）上收 __tests__/harness.ts（2026-10-20
 // 双模式 FR-C-810：simple.test.ts 复用，防复制漂移）。
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { http, HttpResponse } from "msw";
 import { flushPromises, type VueWrapper } from "@vue/test-utils";
 import Dashboard from "../pages/Dashboard.vue";
 import SubnetConflictBanner from "../components/SubnetConflictBanner.vue";
@@ -170,6 +171,36 @@ describe("Wizard 走查", () => {
     expect(done.text()).toContain("100.64.0.2");
     expect(done.text()).toContain("我的分组");
     expect(done.find('[data-testid="wizard-enter"]').exists()).toBe(true);
+  });
+
+  it("③ 空分组（默认组 approval 待审）→ 结果页呈现待审批标签", async () => {
+    // SEC-62/07 §5.2：注册成功但 ack 仅 approved 成员行 → 空组=待审批，向导如实呈现。
+    // 覆盖须在 mountPage 之后（后注册者优先——mountPage 内部注册默认 handlers）
+    const { wrapper } = await mountPage(Wizard, unregisteredState(), "/wizard");
+    server.use(
+      http.post("*/api/wizard/register", () =>
+        HttpResponse.json({ code: 0, msg: "ok", data: {
+          deviceId: "77777777-7777-4777-8777-777777777777",
+          remoteCode: "7g8h9j",
+          virtualIp: "100.64.0.2",
+          groups: [],
+        } })),
+    );
+
+    // ① 测试可达 → ② 下一步（默认分组模式无附加必填）→ 注册
+    await wrapper.find('input[data-testid="wizard-addr"]').setValue("203.0.113.10:7000");
+    await wrapper.find('[data-testid="wizard-test"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="wizard-next"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="wizard-register"]').trigger("click");
+    await flushPromises();
+
+    const done = wrapper.find(".done");
+    expect(done.exists()).toBe(true);
+    const tag = done.find('[data-testid="wizard-pending-approval"]');
+    expect(tag.exists()).toBe(true);
+    expect(tag.text()).toContain("待审批");
   });
 });
 

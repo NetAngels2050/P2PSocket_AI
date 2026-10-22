@@ -311,7 +311,19 @@ onMounted(async () => {
         </div>
         <div>
           <dt>分组</dt>
-          <dd>{{ result.groups.map((g) => g.groupName).join("、") || "无" }}</dd>
+          <dd>
+            <template v-if="result.groups.length">
+              {{ result.groups.map((g) => g.groupName).join("、") }}
+            </template>
+            <!-- 空组=默认分组 approval 策略下注册成功但待审（SEC-62/07 §5.2）——管理员批准后入组 -->
+            <el-tag
+              v-else
+              type="warning"
+              data-testid="wizard-pending-approval"
+            >
+              待审批
+            </el-tag>
+          </dd>
         </div>
       </dl>
       <el-button

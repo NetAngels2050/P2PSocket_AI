@@ -190,18 +190,18 @@ public sealed class AdminGroupsApiTests : IAsyncLifetime
         }
         Assert.Equal(1, await AuditCountAsync("default_join_policy_change"));
 
-        // 新申请走新策略：注册即已入默认组（03 §6），须先 0x52 退组再凭码申请 → 3002 待审批
+        // 新申请走新策略：approval 下注册不再直入默认组（M5-03/SEC-62 注册入组遵循 JoinPolicy），
+        // carol 本就非成员无需退组；凭码申请与注册建的 pending 同组同设备去重 → 3002 待审批
         Guid defId;
         await using (var db0 = CreateDb())
             defId = db0.Groups.AsNoTracking().Single(g => g.IsDefault).Id;
-        var (joiner, _) = await RegisterLoggedInAsync("g05-d1", "carol");
-        await joiner.SendAsync(new GroupLeave(joiner.NextSeq(), joiner.Now(), MsgType.GroupLeave, defId));
-        Assert.True((await joiner.ReceiveSkippingPushesAsync<GroupLeaveAck>())!.Ok);
+        var (joiner, joinerId) = await RegisterLoggedInAsync("g05-d1", "carol");
         await joiner.SendAsync(new GroupJoin(joiner.NextSeq(), joiner.Now(), MsgType.GroupJoin, "d05cod"));
         var wait = await joiner.ReceiveSkippingPushesAsync<ErrorMessage>();
         Assert.Equal(ErrorCode.GroupNeedApproval, wait!.Code);
         await using var db2 = CreateDb();
-        Assert.Equal(1, await db2.JoinRequests.CountAsync(r => r.Status == "pending" && r.GroupId == defId));
+        Assert.Equal(1, await db2.JoinRequests.CountAsync(r => r.Status == "pending"
+            && r.GroupId == defId && r.DeviceId == joinerId));
 
         // 切回 free：清残留 pending 直接入组（0x51 free 分支）
         Assert.Equal(HttpStatusCode.OK,
@@ -297,6 +297,49 @@ public sealed class AdminGroupsApiTests : IAsyncLifetime
             (await _http.PostAsync($"/api/group-requests/{Guid.NewGuid()}/approve", null)).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest,
             (await _http.PostAsync("/api/group-requests/not-a-guid/reject", null)).StatusCode);
+    }
+
+    // ── A-14 注册入组遵循审批策略（SEC-62/M5-03、07 §5.2）────────────
+
+    [Fact]
+    public async Task A14_默认分组策略切换_注册入组路径随之()
+    {
+        // approval：新注册 → 待审队列 + ack 空组 → 管理页批准 → 成员可见
+        Assert.Equal(HttpStatusCode.OK,
+            (await _http.PutAsJsonAsync("/api/groups/default", new { policy = "approval" })).StatusCode);
+
+        var (_, deviceId, ack) = await RegisterAsync("P2P-A14-DEV001");
+        Assert.Empty(ack.Groups);
+
+        var items = (await GetAsync("/api/group-requests?status=pending")).GetProperty("data")
+            .GetProperty("items").EnumerateArray().ToList();
+        var row = items.Single(i => i.GetProperty("deviceId").GetGuid() == deviceId);
+        var requestId = row.GetProperty("requestId").GetGuid();
+
+        Assert.Equal(HttpStatusCode.OK,
+            (await _http.PostAsync($"/api/group-requests/{requestId}/approve", null)).StatusCode);
+        await using (var db = CreateDb())
+            Assert.True(await db.GroupMembers.AnyAsync(m => m.DeviceId == deviceId && m.Approved), "批准后成员可见");
+
+        // free：切回后新注册直入（策略=free 行为不变）
+        Assert.Equal(HttpStatusCode.OK,
+            (await _http.PutAsJsonAsync("/api/groups/default", new { policy = "free" })).StatusCode);
+        var (_, _, ack2) = await RegisterAsync("P2P-A14-DEV002");
+        Assert.Contains(ack2.Groups, g => g.GroupName == DbInitializer.DefaultGroupName);
+    }
+
+    /// <summary>仅注册不登录（M5-03 注册路径本身即测试对象）。</summary>
+    private async Task<(TestPcpClient Client, Guid DeviceId, RegisterAck Ack)> RegisterAsync(string macCode)
+    {
+        var client = await TestPcpClient.ConnectAsync(_server.LocalEndPoint!);
+        _clients.Add(client);
+        await client.HelloAsync(deviceId: null);
+        var key = EcKeyPair.Generate();
+        await client.SendAsync(new Register(client.NextSeq(), client.Now(), MsgType.Register,
+            macCode, "a14-dev", "windows", "0.1.0", key.ExportPublicKey(), null, null, null), sign: false);
+        var ack = await client.ReceiveSkippingPushesAsync<RegisterAck>() ?? throw new IOException("注册无应答");
+        client.EstablishWithSecret(Ecies.Decrypt(key, ack.DeviceSecretBox));
+        return (client, ack.DeviceId, ack);
     }
 
     /// <summary>按邀请码反查 groupId（测试侧小口径：申请单无需提前知道组 id）。</summary>

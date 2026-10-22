@@ -13,7 +13,8 @@ namespace P2P.Server.Services;
 /// ＋③总量上限（仅拦新增行——覆盖式恢复不增设备数放行，否则达上限后存量设备凭据丢失即被永久锁死）；
 /// 三闸统一 4006 REGISTRATION_DENIED（对外不区分拒因防探测枚举），拒因仅入审计 register_deny
 /// （reason=switch|rate|quota）；拒绝后连接停留 NeedRegister 可重试不断连。
-/// 新建设备（ECIES 下发 deviceSecret、固定 .2、默认分组入组）；
+/// 新建设备（ECIES 下发 deviceSecret、固定 .2、默认分组入组——遵循分组 JoinPolicy：free 即入、
+/// approval 建 pending 待审行，SEC-62/07 §5.2）；
 /// macCode 离线命中 → 覆盖式恢复（OQ-14：保留 deviceId/远程码/归属/分组，存量映射不失效）；
 /// 在线命中 → 4004 DEVICE_ACTIVE；解绑删除设备并清理关联行；
 /// 0x14 远程码重置（M2-12，passive 允许——本机管理类）：生成新码、旧码立即失效（PRD 05 §5），
@@ -124,18 +125,38 @@ public sealed class RegistrationService(
         };
         db.Devices.Add(device);
 
-        // 默认分组入组（03 §6 种子保证存在；free 策略即入）
+        // 默认分组入组遵循 JoinPolicy（SEC-62、07 §5.2——M5-03 前硬编码 Approved=true 直入）：
+        // free 即入（现状行为）；approval 建 pending 待审行（与 0x51 凭码入组同语义，管理页策略
+        // 双写行值即时生效），不写 group_members——组内不可见（L2 可见性=approved 成员行口径），
+        // 审批承载复用既有件（0x53 队列/管理页 API→DecideJoinRequestAsync 共享核）
         var defaultGroup = await db.Groups.AsNoTracking().SingleAsync(g => g.IsDefault);
-        db.GroupMembers.Add(new GroupMember
+        if (defaultGroup.JoinPolicy == "approval")
         {
-            Id = Guid.NewGuid(),
-            GroupId = defaultGroup.Id,
-            DeviceId = device.Id,
-            Approved = true,
-            JoinedAt = now,
-        });
+            db.JoinRequests.Add(new JoinRequest
+            {
+                Id = Guid.NewGuid(),
+                GroupId = defaultGroup.Id,
+                DeviceId = device.Id,
+                Status = "pending",
+                CreatedAt = now,
+            });
+        }
+        else
+        {
+            db.GroupMembers.Add(new GroupMember
+            {
+                Id = Guid.NewGuid(),
+                GroupId = defaultGroup.Id,
+                DeviceId = device.Id,
+                Approved = true,
+                JoinedAt = now,
+            });
+        }
         await db.SaveChangesAsync();
         await audit.WriteAsync("register", device.Id, detail: new { device.MacCode, device.RemoteCode });
+        if (defaultGroup.JoinPolicy == "approval")
+            await audit.WriteAsync("group_join_request", device.Id,
+                detail: new { GroupId = defaultGroup.Id, Source = "register" });
 
         await SendRegisterAckAsync(session, db, msg, device, device.DeviceSecret);
         session.CompleteRegistration(device.Id, device.DeviceSecret);
@@ -152,12 +173,13 @@ public sealed class RegistrationService(
         await audit.WriteAsync("register_deny", detail: new { reason, ip = ip?.ToString() });
     }
 
-    /// <summary>0x11：ECIES(staticPubKey) 下发 deviceSecret + 设备信息 + 分组列表。</summary>
+    /// <summary>0x11：ECIES(staticPubKey) 下发 deviceSecret + 设备信息 + 分组列表
+    /// （仅 approved 成员行——approval 策略下注册成功但分组为空，向导如实呈现待审批，07 §5.2）。</summary>
     private static async Task SendRegisterAckAsync(ControlSession session, AppDbContext db,
         Register msg, Device device, byte[] secret)
     {
         var groups = await db.GroupMembers.AsNoTracking()
-            .Where(m => m.DeviceId == device.Id)
+            .Where(m => m.DeviceId == device.Id && m.Approved)
             .Join(db.Groups, m => m.GroupId, g => g.Id, (m, g) => new GroupInfo(g.Id, g.Name))
             .ToArrayAsync();
 

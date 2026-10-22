@@ -186,6 +186,38 @@ public sealed class RegistrationTests : IAsyncLifetime
         _ = online;
     }
 
+    // ── M5-03 注册入组遵循默认分组策略（SEC-62、07 §5.2）─────────────
+
+    [Fact]
+    public async Task Register_DefaultGroupApproval_PendingAndInvisibleUntilApproved()
+    {
+        // 策略切换（管理页 PUT 同值落行——行值即时生效）
+        await using (var db = CreateDb())
+            await db.Groups.Where(g => g.IsDefault)
+                .ExecuteUpdateAsync(s => s.SetProperty(g => g.JoinPolicy, "approval"));
+
+        var (_, _, ack, _) = await RegisterAsync("P2P-APPROVAL001");
+        Assert.Empty(ack.Groups); // 仅 approved 行 → 空组=待审（向导呈现「待审批」的数据面）
+
+        await using var db2 = CreateDb();
+        Assert.False(await db2.GroupMembers.AnyAsync(m => m.DeviceId == ack.DeviceId), "未批准前组内不可见");
+        var request = await db2.JoinRequests.AsNoTracking()
+            .SingleAsync(r => r.DeviceId == ack.DeviceId && r.Status == "pending");
+        Assert.True(await db2.WaitAuditAsync(a => a.Event == "group_join_request"
+            && a.DeviceId == ack.DeviceId && a.Detail!.Contains("register")), "待审入审计（source=register）");
+
+        // 批准走既有共享核（0x53/管理页同执行链）：入组后可见
+        var groups = new GroupService(new StubFactory(CreateDb), _registry,
+            new AuditLogger(new StubFactory(CreateDb), _time), time: _time);
+        Assert.True(await groups.DecideJoinRequestAsync(request.Id, approve: true));
+
+        await using var db3 = CreateDb();
+        Assert.True(await db3.GroupMembers.AnyAsync(m => m.DeviceId == ack.DeviceId && m.Approved), "批准后可见");
+        // 批准审计行 DeviceId=审批者（actor）——被批准设备在 detail（既有共享核口径）
+        Assert.True(await db3.WaitAuditAsync(a => a.Event == "group_join_approve"
+            && a.Detail!.Contains(ack.DeviceId.ToString())));
+    }
+
     // ── M5-02 注册准入三重闸门（SEC-61、07 §5.1）──────────────────────
 
     /// <summary>直写 server_config（闸门参数改值——测试不走红 Web PUT）。</summary>
