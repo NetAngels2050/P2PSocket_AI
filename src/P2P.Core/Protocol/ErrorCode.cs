@@ -18,6 +18,7 @@ public static class ErrorCode
     public const int RemoteCodeInvalid = 4003;
     public const int DeviceActive = 4004;        // OQ-14：同 macCode 重注册且原设备在线
     public const int TargetOffline = 4005;       // OQ-18/TD-19：打洞目标离线/邀请不可达
+    public const int RegistrationDenied = 4006;  // M5-02/SEC-61：注册三重闸门统一拒（拒因仅入审计）
     public const int PunchFailed = 5001;
     public const int RelayDisabled = 5002;
     public const int ServerUnreachable = 5003;
@@ -42,6 +43,7 @@ public static class ErrorCode
         RemoteCodeInvalid => "remote_code_invalid",
         DeviceActive => "device_active",
         TargetOffline => "target_offline",
+        RegistrationDenied => "registration_denied",
         PunchFailed => "punch_failed",
         RelayDisabled => "relay_disabled",
         ServerUnreachable => "server_unreachable",

@@ -92,6 +92,9 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
         Assert.True(byKey["log_level"].GetProperty("restartRequired").GetBoolean());
         Assert.False(byKey["relay_enabled"].GetProperty("restartRequired").GetBoolean()); // 运行期现读
         Assert.False(byKey["default_join_policy"].GetProperty("restartRequired").GetBoolean());
+        Assert.Equal("1", byKey["device_registration_open"].GetProperty("value").GetString()); // M5-02 种子：默认开放
+        Assert.False(byKey["device_registration_open"].GetProperty("restartRequired").GetBoolean()); // 注册路径现读
+        Assert.True(byKey["register_rate_per_ip"].GetProperty("restartRequired").GetBoolean()); // 启动期入令牌桶
     }
 
     [Fact]
@@ -133,6 +136,8 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
             ["max_devices"] = "0",                         // 数值下界
             ["stun_rate_per_ip"] = "-1",                   // 负数
             ["relay_enabled"] = "2",                       // 非 0|1
+            ["device_registration_open"] = "on",           // M5-02 非 0|1
+            ["register_rate_per_ip"] = "0",                // M5-02 频控下界
             ["default_join_policy"] = "open",              // 域外
             ["relay_rate_limit"] = "99999999999",          // 超 int
             ["update_url"] = "ftp://x",                    // 非 http(s)

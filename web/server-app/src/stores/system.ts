@@ -1,4 +1,4 @@
-// M3-11 系统配置与审计 store（06 §3、FR-S-825、NFR-54）：server_config 白名单 18 键现值+
+// M3-11 系统配置与审计 store（06 §3、FR-S-825、NFR-54）：server_config 白名单 21 键现值+
 // 行级部分更新（PUT 单键，服务端全量校验整单拒绝）+审计 newest-first 过滤分页。
 import { ref } from "vue";
 import { defineStore } from "pinia";

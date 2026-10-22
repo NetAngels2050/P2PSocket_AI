@@ -35,6 +35,9 @@ public sealed class AdminSystemApi(
         ["log_level"] = (v => LogLevelCanonical(v) is not null,
             "须为 Verbose|Debug|Information|Warning|Error|Fatal"),
         ["max_devices"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 100000, "须为 1~100000"),
+        ["device_registration_open"] = (v => v is "0" or "1", "须为 0|1"),
+        ["register_rate_per_ip"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000,
+            "须为 1~1000000（次/小时/IP）"),
         ["punch_retention_days"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 3650, "须为 1~3650（天）"),
         ["stun_rate_per_ip"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000, "须为 1~1000000（pps）"),
         ["stun_rate_per_device"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 100000, "须为 1~100000（QPS）"),
@@ -50,10 +53,11 @@ public sealed class AdminSystemApi(
     };
 
     /// <summary>启动期一次性读取的键（restartRequired=true）：public_addr/stun_* 在服务构造时读
-    /// （M2-36/M2-06/M3-15），log_level 在 Serilog 装配时读——改动须重启方生效；其余键运行期现读即时生效
-    /// （registration_open/max_devices/default_join_policy/update_*/保留天数每轮现读）。</summary>
+    /// （M2-36/M2-06/M3-15），register_rate_per_ip 启动期读入 RegistrationGuard 令牌桶（M5-02），
+    /// log_level 在 Serilog 装配时读——改动须重启方生效；其余键运行期现读即时生效
+    /// （registration_open/device_registration_open/max_devices/default_join_policy/update_*/保留天数每轮现读）。</summary>
     private static readonly HashSet<string> RestartKeys =
-        ["public_addr", "stun_auth", "stun_alt_addr", "stun_rate_per_ip", "stun_rate_per_device", "stun_circuit_pps", "log_level"];
+        ["public_addr", "stun_auth", "stun_alt_addr", "stun_rate_per_ip", "stun_rate_per_device", "stun_circuit_pps", "register_rate_per_ip", "log_level"];
 
     public void Map(WebApplication app)
     {

@@ -102,6 +102,16 @@ builder.Services.AddSingleton<IDbContextFactory<AppDbContext>>(ServerDatabase.Cr
 builder.Services.AddSingleton<DeviceRegistry>();
 builder.Services.AddSingleton<AuditLogger>();
 builder.Services.AddSingleton<Authorizer>();
+// M5-02 注册准入闸②（SEC-61、07 §5.1）：register_rate_per_ip 启动期读库入令牌桶
+// （同 StunGuard 三速率键口径——改值须重启；缺省 10 次/h/IP）
+builder.Services.AddSingleton(sp =>
+{
+    using var db = sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext();
+    return new RegistrationGuard(new RegistrationGuardOptions
+    {
+        PerHour = new ServerConfigStore(db).GetInt("register_rate_per_ip"),
+    });
+});
 builder.Services.AddSingleton<RegistrationService>();
 builder.Services.AddSingleton<UserService>();
 // 0x41 列表变更推送（M2-10，FR-S-403）：订阅 DeviceRegistry 在线事件 + GroupService 成员变更触发

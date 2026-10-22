@@ -1,5 +1,5 @@
 // M3-11 运维页走查测试（任务清单完成判定：开关/限速保存与回显、config 校验错误显示、
-// 审计过滤分页；另含会话表渲染+空态、18 键配置表+重启生效 tag、bool 键即时保存、
+// 审计过滤分页；另含会话表渲染+空态、21 键配置表+重启生效 tag、bool 键即时保存、
 // newest-first 翻页）。装配同 admin-pages.test.ts（MSW+pinia/router/ElementPlus 独立实例；
 // 弹窗按可见 overlay 过滤——ElMessageBox 关闭后 v-show 残留教训⑳）。
 import { setupServer } from "msw/node";
@@ -157,13 +157,14 @@ describe("中继页走查", () => {
 // ── 系统页（完成判定：config 校验错误显示、审计过滤分页）────────────────
 
 describe("系统页走查", () => {
-  it("配置表 18 键渲染+重启生效 tag+bool 键即时保存", async () => {
+  it("配置表 21 键渲染+重启生效 tag+bool 键即时保存", async () => {
     const state = createDefaultServerState();
     const { wrapper } = await mountAdminPage(System, state, "/system");
     const table = wrapper.find('[data-testid="system-table"]');
-    await vi.waitFor(() => expect(table.findAll(".el-table__row")).toHaveLength(18));
-    expect(table.text()).toContain("重启生效"); // public_addr 等 6 键
+    await vi.waitFor(() => expect(table.findAll(".el-table__row")).toHaveLength(21));
+    expect(table.text()).toContain("重启生效"); // public_addr 等 7 键（含 register_rate_per_ip）
     expect(table.text()).toContain("中继服务"); // KEY_META 标签
+    expect(table.text()).toContain("设备注册准入"); // M5-02 新键（即时生效，无重启 tag）
 
     // bool 键即时存（无草稿）：relay_enabled 翻 false
     const sw = wrapper.findComponent('[data-testid="system-bool-relay_enabled"]');

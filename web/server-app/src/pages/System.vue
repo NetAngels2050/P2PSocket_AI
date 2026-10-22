@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// M3-11 系统配置与审计页（06 §3、FR-S-825、NFR-54）：server_config 白名单 18 键键值编辑表格
+// M3-11 系统配置与审计页（06 §3、FR-S-825、NFR-54）：server_config 白名单 21 键键值编辑表格
 // （按类型控件：开关 bool/枚举 select/数值 input-number/文本——行级保存 PUT 单键，服务端
 // 全量校验整单拒绝 400{1001} 前端显示错误）+重启生效提示 tag+审计日志（event 过滤+分页
 // newest-first，detail 原始 JSON 文本截断透传）。
@@ -19,12 +19,15 @@ const KEY_META: Record<string, { label: string; type: "bool" | "select" | "numbe
   relay_enabled: { label: "中继服务", type: "bool" },
   relay_rate_limit: { label: "中继限速（B/s）", type: "number" },
   stun_auth: { label: "STUN 认证", type: "bool" },
+  stun_alt_addr: { label: "STUN 辅端点", type: "text" },
   public_addr: { label: "公网通告地址", type: "text" },
   virtual_subnet: { label: "虚拟子网（CIDR）", type: "text" },
   default_join_policy: { label: "默认分组策略", type: "select", options: ["free", "approval"] },
   audit_retention_days: { label: "审计保留（天）", type: "number" },
   punch_retention_days: { label: "打洞统计保留（天）", type: "number" },
   max_devices: { label: "设备上限", type: "number" },
+  device_registration_open: { label: "设备注册准入", type: "bool" }, // M5-02/SEC-61（即时生效）
+  register_rate_per_ip: { label: "注册频控（次/h/IP）", type: "number" }, // M5-02（重启生效）
   stun_rate_per_ip: { label: "STUN 每 IP（pps）", type: "number" },
   stun_rate_per_device: { label: "STUN 每设备（QPS）", type: "number" },
   stun_circuit_pps: { label: "STUN 断路阈值（pps）", type: "number" },
@@ -103,7 +106,7 @@ onMounted(async () => {
       data-testid="system-config"
     >
       <template #header>
-        server_config（白名单 18 键；行级保存，服务端校验整单拒绝）
+        server_config（白名单全集；行级保存，服务端校验整单拒绝）
       </template>
       <el-table
         v-if="system.config"

@@ -26,6 +26,8 @@ public static class DbInitializer
         ("audit_retention_days", "90"),
         ("log_level", "Information"),
         ("max_devices", "500"),
+        ("device_registration_open", "1"), // M5-02/SEC-61：设备注册准入开关（默认开放 OQ-20③；注册路径现读）
+        ("register_rate_per_ip", "10"),    // M5-02/SEC-61：单 IP 注册频控 次/h（启动期读入 RegistrationGuard）
         ("punch_retention_days", "90"),
         ("stun_rate_per_ip", "50"),
         ("stun_rate_per_device", "10"),

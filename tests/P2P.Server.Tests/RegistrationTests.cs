@@ -23,6 +23,7 @@ public sealed class RegistrationTests : IAsyncLifetime
     private SignalingCoordinator _signaling = null!;
     private RelayService _relay = null!;
     private FakeTimeProvider _time = null!;
+    private RegistrationGuard _guard = null!;
 
     public Task InitializeAsync()
     {
@@ -32,7 +33,8 @@ public sealed class RegistrationTests : IAsyncLifetime
         _time = new FakeTimeProvider(DateTimeOffset.UtcNow);
 
         var audit = new AuditLogger(factory, _time);
-        _registration = new RegistrationService(factory, _registry, audit, _time);
+        _guard = new RegistrationGuard(new RegistrationGuardOptions(), _time); // 闸②：缺省 10 次/h/IP
+        _registration = new RegistrationService(factory, _registry, audit, _time, guard: _guard);
         _signaling = new SignalingCoordinator(factory, _registry, new Authorizer(factory), audit, _time);
         _relay = new RelayService(factory, _registry, _signaling.ResolveRelayPeers, time: _time);
         var router = new ControlMessageRouter(_registration, new UserService(factory, audit, _time),
@@ -57,6 +59,7 @@ public sealed class RegistrationTests : IAsyncLifetime
     private async Task<TestPcpClient> ConnectAsync()
     {
         var client = await TestPcpClient.ConnectAsync(_server.LocalEndPoint!);
+        client.Time = _time; // ts 校验与服务端假时钟对齐（M5-02 频控测试推进 1h 后仍可用）
         _clients.Add(client);
         return client;
     }
@@ -181,6 +184,95 @@ public sealed class RegistrationTests : IAsyncLifetime
 
         Assert.True(_registry.IsOnline(ack.DeviceId), "原设备不受影响");
         _ = online;
+    }
+
+    // ── M5-02 注册准入三重闸门（SEC-61、07 §5.1）──────────────────────
+
+    /// <summary>直写 server_config（闸门参数改值——测试不走红 Web PUT）。</summary>
+    private async Task SetConfigAsync(string key, string value)
+    {
+        await using var db = CreateDb();
+        var row = await db.ServerConfig.SingleAsync(c => c.Key == key);
+        row.Value = value;
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>NeedRegister 态连接上发未签名 Register，收 0x7E 预期错误。</summary>
+    private static async Task<ErrorMessage> SendRegisterExpectErrorAsync(TestPcpClient client, string macCode)
+    {
+        var key = EcKeyPair.Generate();
+        await client.SendAsync(new Register(client.NextSeq(), client.Now(), MsgType.Register,
+            macCode, "host-x", "windows", "0.1.0", key.ExportPublicKey(), null, null, null), sign: false);
+        return await client.ReceiveAsync<ErrorMessage>() ?? throw new IOException("预期错误应答");
+    }
+
+    [Fact]
+    public async Task Gate1_关闸拒4006审计_同连接开闸重试成功()
+    {
+        await SetConfigAsync("device_registration_open", "0");
+        var client = await ConnectAsync();
+        var helloAck = await client.HelloAsync(deviceId: null);
+        Assert.Equal(HelloStatus.NeedRegister, helloAck.Status);
+
+        var error = await SendRegisterExpectErrorAsync(client, "P2P-GATE100001");
+        Assert.Equal(ErrorCode.RegistrationDenied, error.Code);
+        Assert.Equal("registration_denied", error.HttpLikeMsg); // 三闸统一文案不区分拒因
+
+        await using (var db = CreateDb())
+            Assert.True(await db.WaitAuditAsync(
+                a => a.Event == "register_deny" && a.Detail!.Contains("\"switch\"")));
+
+        // 拒绝后停留 NeedRegister 不断连：开闸（现读）后同连接重试即成功
+        await SetConfigAsync("device_registration_open", "1");
+        await client.SendAsync(new Register(client.NextSeq(), client.Now(), MsgType.Register,
+            "P2P-GATE100001", "host-x", "windows", "0.1.0", EcKeyPair.Generate().ExportPublicKey(),
+            null, null, null), sign: false);
+        var ack = await client.ReceiveAsync<RegisterAck>() ?? throw new IOException("开闸后注册无应答");
+        Assert.NotEqual(Guid.Empty, ack.DeviceId);
+    }
+
+    [Fact]
+    public async Task Gate3_超上限拒新增_覆盖式恢复查而不拦()
+    {
+        await SetConfigAsync("max_devices", "1");
+        var (first, _, firstAck, _) = await RegisterAsync("P2P-QUOTA00001"); // 第 1 台：count 0→1 放行
+
+        var client = await ConnectAsync();
+        await client.HelloAsync(deviceId: null);
+        var error = await SendRegisterExpectErrorAsync(client, "P2P-QUOTA00002");
+        Assert.Equal(ErrorCode.RegistrationDenied, error.Code);
+        await using (var db = CreateDb())
+            Assert.True(await db.WaitAuditAsync(
+                a => a.Event == "register_deny" && a.Detail!.Contains("\"quota\"")));
+
+        // 查而不拦：达上限后离线设备覆盖式恢复放行（不新增行，07 §5.1）
+        await first.DisposeAsync();
+        await WaitForAsync(() => !_registry.IsOnline(firstAck.DeviceId), "原会话注销");
+        var (_, _, recovered, _) = await RegisterAsync("P2P-QUOTA00001");
+        Assert.Equal(firstAck.DeviceId, recovered.DeviceId);
+    }
+
+    [Fact]
+    public async Task Gate2_同IP超桶拒_推进1h补币恢复()
+    {
+        for (var i = 0; i < 10; i++) // 容量 10 初始满桶（缺省 register_rate_per_ip=10）
+            await RegisterAsync($"P2P-RATE0000{i}");
+
+        var client = await ConnectAsync();
+        await client.HelloAsync(deviceId: null);
+        var error = await SendRegisterExpectErrorAsync(client, "P2P-RATE00010");
+        Assert.Equal(ErrorCode.RegistrationDenied, error.Code);
+        await using (var db = CreateDb())
+            Assert.True(await db.WaitAuditAsync(
+                a => a.Event == "register_deny" && a.Detail!.Contains("\"rate\"")));
+
+        // 拒绝不断连 + FakeTime 推进 1h 补满桶 → 同连接重试成功
+        _time.Advance(TimeSpan.FromHours(1));
+        await client.SendAsync(new Register(client.NextSeq(), client.Now(), MsgType.Register,
+            "P2P-RATE00010", "host-x", "windows", "0.1.0", EcKeyPair.Generate().ExportPublicKey(),
+            null, null, null), sign: false);
+        var ack = await client.ReceiveAsync<RegisterAck>() ?? throw new IOException("补币后注册无应答");
+        Assert.NotEqual(Guid.Empty, ack.DeviceId);
     }
 
     // ── 0x12 解绑 ─────────────────────────────────────────────────────

@@ -261,18 +261,26 @@ public class PcpM2MessageTests
     }
 
     [Fact]
-    public void PunchRequest_OldWire_WithoutConcurrencyField_Decodes()
+    public void PunchRequest_OldWire_WithoutLocalCandidatesField_Decodes()
     {
-        // 加法演进兼容（02 §7）：M1 端编码的 7 元素数组（无 punchConcurrency）在 M2 schema 下可解
+        // 加法演进兼容（02 §7）：M2 端编码的 8 元素数组（无 localCandidates，NET-76 前旧端）
+        // 在当前 9 元素 schema 下可解；更深一层 M1 端 7 元素（无 punchConcurrency）同容忍
         var full = PcpCodec.Encode(new PunchRequest(1, 1UL, MsgType.PunchRequest,
             Guid.NewGuid(), null, "udp", null, null));
-        Assert.Equal(0x98, full[0]); // fixarray(8)
+        Assert.Equal(0x99, full[0]); // fixarray(9)
 
-        var oldWire = full[..^1]; // 去掉尾部 nil（第 8 元素）
-        oldWire[0] = 0x97;        // 改写为 fixarray(7)
+        var oldWire = full[..^1]; // 去掉尾部 nil（第 9 元素 localCandidates）
+        oldWire[0] = 0x98;        // 改写为 fixarray(8)
         var decoded = PcpCodec.Decode<PunchRequest>(oldWire);
+        Assert.Null(decoded.LocalCandidates);
         Assert.Null(decoded.PunchConcurrency);
         Assert.Equal("udp", decoded.Proto);
+
+        var m1Wire = oldWire[..^1]; // 再去第 8 元素 nil（punchConcurrency）
+        m1Wire[0] = 0x97;           // 改写为 fixarray(7)
+        var m1 = PcpCodec.Decode<PunchRequest>(m1Wire);
+        Assert.Null(m1.PunchConcurrency);
+        Assert.Null(m1.LocalCandidates);
     }
 
     // ── 未知 msgType 容忍不回归（完成判定④，02 §7）────────────────────────

@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.EntityFrameworkCore;
 using P2P.Core.Crypto;
 using P2P.Core.Protocol;
@@ -7,6 +8,11 @@ namespace P2P.Server.Services;
 
 /// <summary>
 /// 注册族处理（02 §2.4 0x10/0x12/0x14；FR-S-101/102/104/106/903）：
+/// M5-02 注册准入三重闸门（SEC-61、07 §5.1）——①开关 device_registration_open 现读（关→拒，
+/// 新建与覆盖式恢复同拒）＋②单 IP 频控（RegistrationGuard 令牌桶，源 IP 不可得的装配跳过）
+/// ＋③总量上限（仅拦新增行——覆盖式恢复不增设备数放行，否则达上限后存量设备凭据丢失即被永久锁死）；
+/// 三闸统一 4006 REGISTRATION_DENIED（对外不区分拒因防探测枚举），拒因仅入审计 register_deny
+/// （reason=switch|rate|quota）；拒绝后连接停留 NeedRegister 可重试不断连。
 /// 新建设备（ECIES 下发 deviceSecret、固定 .2、默认分组入组）；
 /// macCode 离线命中 → 覆盖式恢复（OQ-14：保留 deviceId/远程码/归属/分组，存量映射不失效）；
 /// 在线命中 → 4004 DEVICE_ACTIVE；解绑删除设备并清理关联行；
@@ -19,7 +25,8 @@ public sealed class RegistrationService(
     AuditLogger audit,
     TimeProvider? time = null,
     InvalidationPusher? invalidation = null,
-    DeviceListPusher? listPusher = null)
+    DeviceListPusher? listPusher = null,
+    RegistrationGuard? guard = null)
 {
     /// <summary>统一下发虚拟 IP 固定 .2（OQ-13：单机自连通场景无需按位分配）。</summary>
     public const string VirtualIp = "100.64.0.2";
@@ -36,6 +43,23 @@ public sealed class RegistrationService(
         }
 
         await using var db = await dbFactory.CreateDbContextAsync();
+        var config = new ServerConfigStore(db);
+        var ip = session.RemoteEndPoint?.Address;
+
+        // 闸① 开关（现读，relay_enabled 同模式；关闸新建与覆盖式恢复同拒——M5-02/07 §5.1）
+        if (!config.GetBool("device_registration_open"))
+        {
+            await DenyAsync(session, "switch", ip);
+            return;
+        }
+
+        // 闸② 单 IP 频控（内存令牌桶；guard 未装配或源 IP 不可得=进程内/测试装配跳过）
+        if (ip is not null && guard is not null && !guard.TryAcquire(ip))
+        {
+            await DenyAsync(session, "rate", ip);
+            return;
+        }
+
         var now = _time.GetLocalNow().UtcDateTime;
         var existing = await db.Devices.AsNoTracking()
             .SingleOrDefaultAsync(d => d.MacCode == msg.MacCode);
@@ -76,6 +100,13 @@ public sealed class RegistrationService(
             return;
         }
 
+        // 闸③ 总量上限（仅拦新增行——覆盖式恢复在上方 existing 分支放行，07 §5.1 查而不拦）
+        if (await db.Devices.CountAsync() >= config.GetInt("max_devices"))
+        {
+            await DenyAsync(session, "quota", ip);
+            return;
+        }
+
         // 新建设备
         var device = new Device
         {
@@ -108,6 +139,17 @@ public sealed class RegistrationService(
 
         await SendRegisterAckAsync(session, db, msg, device, device.DeviceSecret);
         session.CompleteRegistration(device.Id, device.DeviceSecret);
+    }
+
+    /// <summary>
+    /// 闸门拒绝（M5-02/07 §5.1）：三闸统一 4006 registration_denied——对外不区分拒因
+    /// （区分响应=免费探测 oracle：枚举开关状态/频控边界/容量余量）；拒因仅入审计；
+    /// 不断连，连接停留 NeedRegister 可重试。
+    /// </summary>
+    private async Task DenyAsync(ControlSession session, string reason, IPAddress? ip)
+    {
+        await session.SendErrorAsync(ErrorCode.RegistrationDenied, "registration_denied");
+        await audit.WriteAsync("register_deny", detail: new { reason, ip = ip?.ToString() });
     }
 
     /// <summary>0x11：ECIES(staticPubKey) 下发 deviceSecret + 设备信息 + 分组列表。</summary>

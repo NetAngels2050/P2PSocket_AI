@@ -170,10 +170,13 @@ const CONFIG_DEFAULTS: Record<string, string> = {
   relay_rate_limit: "0",
   public_addr: "",
   stun_auth: "1",
+  stun_alt_addr: "",
   virtual_subnet: "100.64.0.0/24",
   audit_retention_days: "90",
   log_level: "Information",
   max_devices: "500",
+  device_registration_open: "1", // M5-02/SEC-61：设备注册准入开关
+  register_rate_per_ip: "10", // M5-02/SEC-61：单 IP 注册频控 次/h
   punch_retention_days: "90",
   stun_rate_per_ip: "50",
   stun_rate_per_device: "10",
@@ -371,7 +374,8 @@ export function createServerHandlers(state: MockServerState) {
     http.get("*/api/system/config", () => {
       if (!state.authed) return unauthorized();
       const restartKeys = new Set([
-        "public_addr", "stun_auth", "stun_rate_per_ip", "stun_rate_per_device", "stun_circuit_pps", "log_level",
+        "public_addr", "stun_auth", "stun_alt_addr", "stun_rate_per_ip", "stun_rate_per_device",
+        "stun_circuit_pps", "register_rate_per_ip", "log_level", // 与生产 RestartKeys 同口径（M5-02）
       ]);
       return ok({
         items: Object.entries(CONFIG_DEFAULTS).map(([key, def]) => ({
@@ -404,7 +408,8 @@ export function createServerHandlers(state: MockServerState) {
       }
       Object.assign(state.config, body);
       const restartKeys = new Set([
-        "public_addr", "stun_auth", "stun_rate_per_ip", "stun_rate_per_device", "stun_circuit_pps", "log_level",
+        "public_addr", "stun_auth", "stun_alt_addr", "stun_rate_per_ip", "stun_rate_per_device",
+        "stun_circuit_pps", "register_rate_per_ip", "log_level", // 与生产 RestartKeys 同口径（M5-02）
       ]);
       return ok({
         items: Object.entries(CONFIG_DEFAULTS).map(([key, def]) => ({
