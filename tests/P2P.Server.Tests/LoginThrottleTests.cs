@@ -78,4 +78,24 @@ public sealed class LoginThrottleTests
         Assert.Equal(500, t.RecordFailure(LoginThrottle.DimAccount, "u").DelayMs);
         Assert.False(t.RecordFailure(LoginThrottle.DimAccount, "u").SteppedUp); // 帽=首档：第 2 次不跨档
     }
+
+    [Fact]
+    public void IP维窗口快照_仅IP维_降序_出窗归零()
+    {
+        var t = new LoginThrottle(new LoginThrottleOptions(), _time);
+        t.RecordFailure(LoginThrottle.DimAccount, "u");
+        t.RecordFailure(LoginThrottle.DimAccount, "u"); // account 维 2 次（不入快照）
+        t.RecordFailure(LoginThrottle.DimIp, "203.0.113.7");
+        t.RecordFailure(LoginThrottle.DimIp, "203.0.113.7");
+        t.RecordFailure(LoginThrottle.DimIp, "198.51.100.9");
+
+        var snap = t.SnapshotIpWindow(900); // M5-07 AlertPusher 聚合消费面
+        Assert.Equal(2, snap.Count);
+        Assert.Equal(("203.0.113.7", 2), (snap[0].Ip, snap[0].Count)); // 计数降序
+        Assert.Equal(("198.51.100.9", 1), (snap[1].Ip, snap[1].Count));
+        Assert.Equal(3, snap.Sum(s => s.Count)); // 总数=四入口 IP 维聚合
+
+        _time.Advance(TimeSpan.FromSeconds(901)); // 全部出窗 → 空快照（告警基线随窗衰减）
+        Assert.Empty(t.SnapshotIpWindow(900));
+    }
 }

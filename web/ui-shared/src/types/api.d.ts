@@ -1,5 +1,5 @@
 // 本文件由 export-ts 反射生成（06 §5、08 §2③），禁止手改。
-// 源：P2P.Client 展示 DTO + WsEventNames 常量（src/Tools/ExportTs @ 2026-10-18T22:11:23Z）。
+// 源：P2P.Client 展示 DTO + WsEventNames 常量（src/Tools/ExportTs @ 2026-10-22T16:23:49Z）。
 
 /** 响应包裹（04 §0：code=0 成功；!=0 见错误码表 04 §5）。 */
 export interface ApiEnvelope<T> {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// M3-11 系统配置与审计页（06 §3、FR-S-825、NFR-54）：server_config 白名单 23 键键值编辑表格
+// M3-11 系统配置与审计页（06 §3、FR-S-825、NFR-54）：server_config 白名单 30 键键值编辑表格
 // （按类型控件：开关 bool/枚举 select/数值 input-number/文本——行级保存 PUT 单键，服务端
 // 全量校验整单拒绝 400{1001} 前端显示错误）+重启生效提示 tag+审计日志（event 过滤+分页
 // newest-first，detail 原始 JSON 文本截断透传）。
@@ -30,6 +30,13 @@ const KEY_META: Record<string, { label: string; type: "bool" | "select" | "numbe
   register_rate_per_ip: { label: "注册频控（次/h/IP）", type: "number" }, // M5-02（重启生效）
   login_fail_window_sec: { label: "登录失败滑动窗（秒）", type: "number" }, // M5-04/SEC-63（即时生效）
   login_delay_cap_ms: { label: "登录延迟封顶（ms）", type: "number" }, // M5-04/SEC-63（即时生效）
+  alert_enabled: { label: "安全告警", type: "bool" }, // M5-07/SEC-71（即时生效——每 tick 现读）
+  alert_webhook_url: { label: "告警 Webhook", type: "text" }, // M5-07（http/https 均可）
+  alert_window_sec: { label: "告警窗口（秒）", type: "number" }, // M5-07 三类触发共用
+  alert_silence_sec: { label: "告警静默（秒）", type: "number" }, // M5-07 每类型不重复推送
+  alert_login_fail_count: { label: "登录失败告警阈值", type: "number" }, // M5-07 四入口 IP 聚合
+  alert_register_count: { label: "注册告警阈值", type: "number" }, // M5-07 register+recover
+  alert_stun_drop_count: { label: "STUN 丢弃告警阈值", type: "number" }, // M5-07 窗口增量
   stun_rate_per_ip: { label: "STUN 每 IP（pps）", type: "number" },
   stun_rate_per_device: { label: "STUN 每设备（QPS）", type: "number" },
   stun_circuit_pps: { label: "STUN 断路阈值（pps）", type: "number" },
@@ -75,6 +82,21 @@ async function save(key: string, value?: string) {
 /// bool 键 el-switch：切换即存（无草稿态；与 Users 注册开关同交互）
 async function onBoolChange(key: string, open: boolean) {
   await save(key, open ? "1" : "0");
+}
+
+/// M5-07 告警通路验证（07 §13.1）：向已配置 webhook 立即发 type=test 载荷
+/// （须先保存 alert_webhook_url；与 alert_enabled 开关独立——显式手动动作）
+const testingAlert = ref(false);
+async function onTestAlert() {
+  testingAlert.value = true;
+  try {
+    await system.testAlert();
+    ElMessage.success("测试告警已发送（接收端 2xx）");
+  } catch (e) {
+    ElMessage.error(e instanceof ApiError ? e.message : "测试推送失败");
+  } finally {
+    testingAlert.value = false;
+  }
 }
 
 function fmtTime(iso: string): string {
@@ -168,21 +190,34 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column
           label="操作"
-          width="90"
+          width="150"
         >
           <template #default="{ row }">
-            <el-button
-              v-if="KEY_META[row.key]?.type !== 'bool'"
-              size="small"
-              type="primary"
-              plain
-              :disabled="!dirty(row.key)"
-              :loading="saving === row.key"
-              :data-testid="`system-save-${row.key}`"
-              @click="save(row.key)"
-            >
-              保存
-            </el-button>
+            <template v-if="KEY_META[row.key]?.type !== 'bool'">
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                :disabled="!dirty(row.key)"
+                :loading="saving === row.key"
+                :data-testid="`system-save-${row.key}`"
+                @click="save(row.key)"
+              >
+                保存
+              </el-button>
+              <!-- M5-07：告警通路手动验证（先保存 URL 再点） -->
+              <el-button
+                v-if="row.key === 'alert_webhook_url'"
+                size="small"
+                type="warning"
+                plain
+                :loading="testingAlert"
+                data-testid="system-alert-test"
+                @click="onTestAlert"
+              >
+                测试推送
+              </el-button>
+            </template>
             <span
               v-else
               class="muted"

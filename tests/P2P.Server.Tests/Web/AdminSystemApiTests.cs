@@ -102,6 +102,16 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
         Assert.Equal("8000", byKey["login_delay_cap_ms"].GetProperty("value").GetString());
         Assert.False(byKey["login_fail_window_sec"].GetProperty("restartRequired").GetBoolean()); // PUT 热更联动
         Assert.False(byKey["login_delay_cap_ms"].GetProperty("restartRequired").GetBoolean());
+        // M5-07 告警七键种子（OQ-21③ 默认关；AlertPusher 每 tick 现读——皆即时生效）
+        Assert.Equal("0", byKey["alert_enabled"].GetProperty("value").GetString());
+        Assert.Equal("", byKey["alert_webhook_url"].GetProperty("value").GetString());
+        Assert.Equal("300", byKey["alert_window_sec"].GetProperty("value").GetString());
+        Assert.Equal("1800", byKey["alert_silence_sec"].GetProperty("value").GetString());
+        Assert.Equal("10", byKey["alert_login_fail_count"].GetProperty("value").GetString());
+        Assert.Equal("5", byKey["alert_register_count"].GetProperty("value").GetString());
+        Assert.Equal("200", byKey["alert_stun_drop_count"].GetProperty("value").GetString());
+        Assert.False(byKey["alert_enabled"].GetProperty("restartRequired").GetBoolean());
+        Assert.False(byKey["alert_webhook_url"].GetProperty("restartRequired").GetBoolean());
     }
 
     [Fact]
@@ -172,6 +182,11 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
             ["register_rate_per_ip"] = "0",                // M5-02 频控下界
             ["login_fail_window_sec"] = "30",              // M5-04 滑动窗下界（60s）
             ["login_delay_cap_ms"] = "70000",              // M5-04 延迟帽上界（60s）
+            ["alert_enabled"] = "yes",                     // M5-07 非 0|1
+            ["alert_webhook_url"] = "ftp://x",             // M5-07 非 http(s)
+            ["alert_window_sec"] = "30",                   // M5-07 窗口下界（60s）
+            ["alert_silence_sec"] = "-1",                  // M5-07 静默负值
+            ["alert_login_fail_count"] = "0",              // M5-07 阈值下界
             ["default_join_policy"] = "open",              // 域外
             ["relay_rate_limit"] = "99999999999",          // 超 int
             ["update_url"] = "ftp://x",                    // 非 http(s)
@@ -193,6 +208,27 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
             Assert.Equal("100.64.0.0/24", cfg["virtual_subnet"]);
         }
         Assert.Equal(0, _limiter.RateBytesPerSec); // 桶未被动
+    }
+
+    [Fact]
+    public async Task PUT_告警键_合法值写库持久化()
+    {
+        var (status, body) = await PutAsync(new Dictionary<string, string>
+        {
+            ["alert_enabled"] = "1",
+            ["alert_webhook_url"] = "http://192.168.1.10:8080/hook",
+            ["alert_login_fail_count"] = "20",
+        });
+        Assert.Equal(HttpStatusCode.OK, status);
+        var items = body.GetProperty("data").GetProperty("items").EnumerateArray()
+            .ToDictionary(i => i.GetProperty("key").GetString()!);
+        Assert.Equal("1", items["alert_enabled"].GetProperty("value").GetString());
+        Assert.Equal("20", items["alert_login_fail_count"].GetProperty("value").GetString());
+
+        await using var db = CreateDb();
+        var cfg = db.ServerConfig.AsNoTracking().ToDictionary(c => c.Key, c => c.Value);
+        Assert.Equal("1", cfg["alert_enabled"]); // 持久化（AlertPusher 下 tick 现读生效）
+        Assert.Equal("http://192.168.1.10:8080/hook", cfg["alert_webhook_url"]);
     }
 
     [Fact]

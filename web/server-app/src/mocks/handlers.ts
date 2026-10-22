@@ -28,6 +28,7 @@ export interface MockServerState {
   config: Record<string, string>; // server_config 现值（白名单键）
   relaySessions: RelaySessionsView["sessions"]; // M3-11 /relay 会话表
   auditLogs: AuditLogView[]; // M3-11 /system 审计（id 升序存，端点降序出）
+  alertTestCalls: string[]; // M5-07 alert-test 调用记录（目标 URL——mock 不真发，供断言闭环）
 }
 
 /// 测试固定身份（过滤联动断言用稳定 UUID）
@@ -137,6 +138,7 @@ export function createDefaultServerState(): MockServerState {
       },
     ],
     config: { registration_open: "1", default_join_policy: "free" },
+    alertTestCalls: [],
     relaySessions: [
       {
         sid: "9007199254740993", // u64 超 JS 53 位精度示例（字符串承载）
@@ -179,6 +181,13 @@ const CONFIG_DEFAULTS: Record<string, string> = {
   register_rate_per_ip: "10", // M5-02/SEC-61：单 IP 注册频控 次/h
   login_fail_window_sec: "900", // M5-04/SEC-63：登录防爆破滑动窗（PUT 热更即时生效）
   login_delay_cap_ms: "8000", // M5-04/SEC-63：登录延迟封顶 ms
+  alert_enabled: "0", // M5-07/SEC-71：暂无接收端默认关（即时生效）
+  alert_webhook_url: "",
+  alert_window_sec: "300",
+  alert_silence_sec: "1800",
+  alert_login_fail_count: "10",
+  alert_register_count: "5",
+  alert_stun_drop_count: "200",
   punch_retention_days: "90",
   stun_rate_per_ip: "50",
   stun_rate_per_device: "10",
@@ -396,6 +405,8 @@ export function createServerHandlers(state: MockServerState) {
         registration_open: ["0", "1"],
         relay_enabled: ["0", "1"],
         stun_auth: ["0", "1"],
+        device_registration_open: ["0", "1"],
+        alert_enabled: ["0", "1"],
         default_join_policy: ["free", "approval"],
         log_level: ["Trace", "Debug", "Information", "Warning", "Error", "Fatal"],
       };
@@ -420,6 +431,19 @@ export function createServerHandlers(state: MockServerState) {
           restartRequired: restartKeys.has(key),
         })),
       });
+    }),
+
+    // ── M5-07 告警测试推送（07 §13.1：须先配 URL；mock 不真发——记录目标供断言闭环）──
+    http.post("*/api/security/alert-test", () => {
+      if (!state.authed) return unauthorized();
+      const url = state.config.alert_webhook_url ?? "";
+      if (!url)
+        return HttpResponse.json(
+          { code: 1001, message: "参数错误（须先配置 alert_webhook_url）", data: null },
+          { status: 400 },
+        );
+      state.alertTestCalls.push(url);
+      return ok({ sent: true });
     }),
 
     // ── 中继管理（M3-07 端点形状；config 现值走 state.config 两键）────────

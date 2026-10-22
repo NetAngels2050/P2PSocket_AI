@@ -65,7 +65,8 @@ var serverGroups = new GroupService(serverDb, serverRegistry, serverAudit, serve
 var serverAdmin = new AdminService(serverDb, serverRegistry, serverAudit, serverInvalidation, listPusher: serverPusher);
 var serverApp = ServerWebHostService.Build(new P2P.Server.ServerOptions(),
     TimeProvider.System, new AdminSessionStore(TimeProvider.System),
-    serverDb, serverAudit, serverAdmin, serverRegistry, serverGroups);
+    serverDb, serverAudit, serverAdmin, serverRegistry, serverGroups,
+    alertPusher: new AlertPusher(serverDb, new LoginThrottle(), new RegistrationMetrics()));
 
 // ② 路由表（真实注册代码产出；{id:guid} 约束归一为 {id}；/ws/* 无 HTTP 方法元数据单列）
 //    注：未 Start 的 WebApplication 须从 IEndpointRouteBuilder.DataSources 直取（DI 侧 DataSource 未定稿）

@@ -24,6 +24,7 @@ public sealed class RegistrationTests : IAsyncLifetime
     private RelayService _relay = null!;
     private FakeTimeProvider _time = null!;
     private RegistrationGuard _guard = null!;
+    private RegistrationMetrics _metrics = null!;
 
     public Task InitializeAsync()
     {
@@ -34,7 +35,9 @@ public sealed class RegistrationTests : IAsyncLifetime
 
         var audit = new AuditLogger(factory, _time);
         _guard = new RegistrationGuard(new RegistrationGuardOptions(), _time); // 闸②：缺省 10 次/h/IP
-        _registration = new RegistrationService(factory, _registry, audit, _time, guard: _guard);
+        _metrics = new RegistrationMetrics(_time); // M5-07 注册风暴钩子（AlertPusher 消费面）
+        _registration = new RegistrationService(factory, _registry, audit, _time, guard: _guard,
+            metrics: _metrics);
         _signaling = new SignalingCoordinator(factory, _registry, new Authorizer(factory), audit, _time);
         _relay = new RelayService(factory, _registry, _signaling.ResolveRelayPeers, time: _time);
         var router = new ControlMessageRouter(_registration, new UserService(factory, audit, _time),
@@ -119,6 +122,11 @@ public sealed class RegistrationTests : IAsyncLifetime
         Assert.Equal("P2P-AABBCCDDEE01", device.MacCode);
         Assert.True(await db.GroupMembers.AnyAsync(m => m.DeviceId == ack.DeviceId));
         Assert.True(await db.WaitAuditAsync(a => a.Event == "register" && a.DeviceId == ack.DeviceId));
+
+        // M5-07 注册风暴钩子：成功注册按源 IP 计数（本夹具源=127.0.0.1）
+        var snap = _metrics.SnapshotIpWindow(300);
+        Assert.Equal(1, snap.Sum(s => s.Count));
+        Assert.Contains(snap, s => s.Ip == "127.0.0.1");
     }
 
     // ── 0x10 覆盖式恢复（OQ-14）───────────────────────────────────────

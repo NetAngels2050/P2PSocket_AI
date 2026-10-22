@@ -34,7 +34,8 @@ public sealed class ServerWebHostService(
     RelayService? relay = null,
     StunService? stun = null,
     RelayRateLimiter? limiter = null,
-    LoginThrottle? loginThrottle = null) : IHostedService
+    LoginThrottle? loginThrottle = null,
+    AlertPusher? alertPusher = null) : IHostedService
 {
     private WebApplication? _app;
 
@@ -44,7 +45,7 @@ public sealed class ServerWebHostService(
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _app = Build(options, time, sessions, dbFactory, audit, admin, registry, groups, relay, stun,
-            limiter, WebRootOverride, loginThrottle);
+            limiter, WebRootOverride, loginThrottle, alertPusher);
         await _app.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -58,7 +59,8 @@ public sealed class ServerWebHostService(
         AdminSessionStore sessions, IDbContextFactory<AppDbContext> dbFactory, AuditLogger audit,
         AdminService admin, DeviceRegistry registry, GroupService groups,
         RelayService? relay = null, StunService? stun = null, RelayRateLimiter? limiter = null,
-        string? webRootOverride = null, LoginThrottle? loginThrottle = null)
+        string? webRootOverride = null, LoginThrottle? loginThrottle = null,
+        AlertPusher? alertPusher = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls($"http://{options.Listen.WebBind}:{options.Listen.Web}");
@@ -86,6 +88,8 @@ public sealed class ServerWebHostService(
         new AdminMappingsApi(dbFactory).Map(app);
         new AdminSystemApi(dbFactory, limiter, audit, loginThrottle).Map(app);
         new AdminAuditLogsApi(dbFactory).Map(app);
+        // M5-07 安全中心首件（04 §3.2）：alert-test 立即发 type=test（M5-09 overview/blacklist 随任务挂）
+        if (alertPusher is not null) new SecurityApi(dbFactory, alertPusher).Map(app);
 
         // 认证骨架（04 §3.1/§3.2、07 §8）：/api/* 须携带有效会话 Cookie，否则 401 {code:2001}；
         // /api/auth/login 白名单（登录端点 M3-02 挂载）。静态页（SPA 外壳）不经认证——前端路由接管。

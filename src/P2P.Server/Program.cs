@@ -133,6 +133,11 @@ builder.Services.AddSingleton<InvalidationPusher>();
 // 管理操作统一执行点（M2-13，FR-S-105/204/103）：CLI 壳/测试直调/M3 Web 载体共用
 builder.Services.AddSingleton<AdminService>();
 builder.Services.AddSingleton<GroupService>();
+// M5-07 注册风暴计数+告警通道（SEC-71、07 §13.1）：RegistrationMetrics 为 register/register_recover
+// 钩子件；AlertPusher 每 tick 现读 alert_* 七键（PUT 后 ≤30s 生效不占 RestartKeys），依赖 LoginThrottle
+// （IP 维聚合）/RegistrationMetrics/StunService（丢弃增量）——单例注册后 HostedService 复用同实例
+builder.Services.AddSingleton<RegistrationMetrics>();
+builder.Services.AddSingleton<AlertPusher>();
 builder.Services.AddSingleton<MappingService>();
 // 0x63 内网段白名单（M2-11，FR-C-701/702）：段 CRUD + 移除联动 0x75 失效推送
 builder.Services.AddSingleton<LanSegmentService>();
@@ -211,6 +216,8 @@ builder.Services.AddHostedService<ServerHostService>();
 // 管理端点组随任务挂载（M3-02 认证三端点已上，03~08 渐次）
 builder.Services.AddSingleton<AdminSessionStore>();
 builder.Services.AddHostedService<ServerWebHostService>();
+// 注册序最后=逆序停止最先：告警派发先于 Web/业务面收口（停机期在途推送尽快出清）
+builder.Services.AddHostedService(sp => sp.GetRequiredService<AlertPusher>());
 
 await builder.Build().RunAsync();
 return 0;

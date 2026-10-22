@@ -92,6 +92,23 @@ public sealed class LoginThrottle(LoginThrottleOptions? options = null, TimeProv
             _rings.Remove($"{dim[0]}:{key}");
     }
 
+    /// <summary>IP 维窗口快照（M5-07/SEC-71、07 §13.1）：四入口失败环形计数按 IP 汇总——
+    /// AlertPusher login_fail_burst 聚合消费（sum=count、前 3 名=topSources）；account 维不入。
+    /// 纯读不动计数；重启清零同告警基线口径。</summary>
+    public IReadOnlyList<(string Ip, int Count)> SnapshotIpWindow(int windowSec)
+    {
+        lock (_gate)
+        {
+            var now = _time.GetLocalNow().UtcTicks;
+            var windowTicks = (long)Math.Clamp(windowSec, 1, 86400) * TimeSpan.TicksPerSecond;
+            return [.. _rings
+                .Where(kv => kv.Key.StartsWith("i:", StringComparison.Ordinal))
+                .Select(kv => (Ip: kv.Key[2..], Count: kv.Value.CountInWindow(now, windowTicks)))
+                .Where(x => x.Count > 0)
+                .OrderByDescending(x => x.Count)];
+        }
+    }
+
     /// <summary>参数热更（AdminSystemApi PUT 联动——运行期即时生效不占 RestartKeys，04 §3）。</summary>
     public void Update(int windowSec, int delayCapMs)
     {

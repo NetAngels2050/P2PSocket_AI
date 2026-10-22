@@ -45,6 +45,22 @@ public sealed class AdminSystemApi(
             "须为 60~86400（秒）"),
         ["login_delay_cap_ms"] = (v => int.TryParse(v, out var n) && n is >= 0 and <= 60000,
             "须为 0~60000（毫秒，0=不延迟）"),
+        // M5-07/SEC-71 告警七键（AlertPusher 每 tick 现读即时生效——皆运行期键不入 RestartKeys）
+        ["alert_enabled"] = (v => v is "0" or "1", "须为 0|1"),
+        ["alert_webhook_url"] = (v => v.Length == 0
+            || (v.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || v.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) && v.Length <= 500,
+            "须为空或 http(s):// 前缀地址（≤500 字符）"),
+        ["alert_window_sec"] = (v => int.TryParse(v, out var n) && n is >= 60 and <= 86400,
+            "须为 60~86400（秒）"),
+        ["alert_silence_sec"] = (v => int.TryParse(v, out var n) && n is >= 0 and <= 86400,
+            "须为 0~86400（秒，0=不静默）"),
+        ["alert_login_fail_count"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000,
+            "须为 1~1000000（次）"),
+        ["alert_register_count"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000,
+            "须为 1~1000000（次）"),
+        ["alert_stun_drop_count"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000000,
+            "须为 1~1000000000（次）"),
         ["punch_retention_days"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 3650, "须为 1~3650（天）"),
         ["stun_rate_per_ip"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000, "须为 1~1000000（pps）"),
         ["stun_rate_per_device"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 100000, "须为 1~100000（QPS）"),

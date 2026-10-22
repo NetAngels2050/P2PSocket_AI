@@ -1,4 +1,4 @@
-// M3-11 系统配置与审计 store（06 §3、FR-S-825、NFR-54）：server_config 白名单 23 键现值+
+// M3-11 系统配置与审计 store（06 §3、FR-S-825、NFR-54）：server_config 白名单 30 键现值+
 // 行级部分更新（PUT 单键，服务端全量校验整单拒绝）+审计 newest-first 过滤分页。
 import { ref } from "vue";
 import { defineStore } from "pinia";
@@ -23,6 +23,11 @@ export const useSystemStore = defineStore("server-system", () => {
     config.value = await api.put<ConfigListView>(ServerApiPaths.SystemConfig, { [key]: value });
   }
 
+  /// M5-07 告警通路验证（07 §13.1）：立即发 type=test 载荷（须先配 alert_webhook_url）
+  async function testAlert() {
+    await api.post(ServerApiPaths.SecurityAlertTest);
+  }
+
   async function refreshAudits() {
     const q = new URLSearchParams({ page: String(auditPage.value), pageSize: String(AUDIT_PAGE_SIZE) });
     if (auditEvent.value) q.set("event", auditEvent.value);
@@ -41,5 +46,5 @@ export const useSystemStore = defineStore("server-system", () => {
     await refreshAudits();
   }
 
-  return { config, audits, auditPage, auditEvent, refreshConfig, saveKey, refreshAudits, setAuditPage, setAuditEvent };
+  return { config, audits, auditPage, auditEvent, refreshConfig, saveKey, testAlert, refreshAudits, setAuditPage, setAuditEvent };
 });

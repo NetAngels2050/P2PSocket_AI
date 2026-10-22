@@ -1,5 +1,5 @@
 // M3-11 运维页走查测试（任务清单完成判定：开关/限速保存与回显、config 校验错误显示、
-// 审计过滤分页；另含会话表渲染+空态、23 键配置表+重启生效 tag、bool 键即时保存、
+// 审计过滤分页；另含会话表渲染+空态、30 键配置表+重启生效 tag+M5-07 测试推送、bool 键即时保存、
 // newest-first 翻页）。装配同 admin-pages.test.ts（MSW+pinia/router/ElementPlus 独立实例；
 // 弹窗按可见 overlay 过滤——ElMessageBox 关闭后 v-show 残留教训⑳）。
 import { setupServer } from "msw/node";
@@ -157,15 +157,16 @@ describe("中继页走查", () => {
 // ── 系统页（完成判定：config 校验错误显示、审计过滤分页）────────────────
 
 describe("系统页走查", () => {
-  it("配置表 23 键渲染+重启生效 tag+bool 键即时保存", async () => {
+  it("配置表 30 键渲染+重启生效 tag+bool 键即时保存", async () => {
     const state = createDefaultServerState();
     const { wrapper } = await mountAdminPage(System, state, "/system");
     const table = wrapper.find('[data-testid="system-table"]');
-    await vi.waitFor(() => expect(table.findAll(".el-table__row")).toHaveLength(23));
+    await vi.waitFor(() => expect(table.findAll(".el-table__row")).toHaveLength(30));
     expect(table.text()).toContain("重启生效"); // public_addr 等 7 键（含 register_rate_per_ip）
     expect(table.text()).toContain("中继服务"); // KEY_META 标签
     expect(table.text()).toContain("设备注册准入"); // M5-02 新键（即时生效，无重启 tag）
     expect(table.text()).toContain("登录延迟封顶"); // M5-04 新键（即时生效，无重启 tag）
+    expect(table.text()).toContain("告警 Webhook"); // M5-07 新键（即时生效，无重启 tag）
 
     // bool 键即时存（无草稿）：relay_enabled 翻 false
     const sw = wrapper.findComponent('[data-testid="system-bool-relay_enabled"]');
@@ -200,6 +201,40 @@ describe("系统页走查", () => {
       ).toBe(true),
     );
     expect(state.config.public_addr).toBeUndefined(); // mock 态未动（整单拒绝）
+  });
+
+  it("M5-07 测试推送：未配 URL 400 提示→配 URL 保存→推送成功+mock 记录目标", async () => {
+    const state = createDefaultServerState();
+    const { wrapper } = await mountAdminPage(System, state, "/system");
+    const testBtn = await vi.waitFor(() => {
+      const b = wrapper.find('[data-testid="system-alert-test"]');
+      expect(b.exists()).toBe(true);
+      return b;
+    });
+
+    // 未配 alert_webhook_url（默认空）→ 400{1001}，message 如实透出
+    await testBtn.trigger("click");
+    await flushPromises();
+    await vi.waitFor(() =>
+      expect([...document.querySelectorAll(".el-message")].some((m) =>
+        m.textContent?.includes("须先配置 alert_webhook_url")),
+      ).toBe(true),
+    );
+    expect(state.alertTestCalls).toHaveLength(0);
+
+    // 配 URL（文本键 dirty+保存）→ 测试推送成功
+    const input = wrapper.find('[data-testid="system-text-alert_webhook_url"]');
+    await input.setValue("http://192.168.1.10:8080/hook");
+    await wrapper.find('[data-testid="system-save-alert_webhook_url"]').trigger("click");
+    await flushPromises();
+    await testBtn.trigger("click");
+    await flushPromises();
+    await vi.waitFor(() =>
+      expect([...document.querySelectorAll(".el-message")].some((m) =>
+        m.textContent?.includes("测试告警已发送")),
+      ).toBe(true),
+    );
+    expect(state.alertTestCalls).toEqual(["http://192.168.1.10:8080/hook"]);
   });
 
   it("审计过滤分页：25 行 → 首页 20/翻页 5（newest-first id 递减）/group_join 过滤 10 行", async () => {

@@ -30,6 +30,14 @@ public static class DbInitializer
         ("register_rate_per_ip", "10"),    // M5-02/SEC-61：单 IP 注册频控 次/h（启动期读入 RegistrationGuard）
         ("login_fail_window_sec", "900"),  // M5-04/SEC-63：登录防爆破滑动窗（PUT 热更联动 LoginThrottle）
         ("login_delay_cap_ms", "8000"),    // M5-04/SEC-63：递增延迟封顶 ms（同上）
+        // M5-07/SEC-71：告警通道（AlertPusher 每 tick 现读——PUT 后 ≤30s 生效，不占 RestartKeys）
+        ("alert_enabled", "0"),            // OQ-21③：暂无接收端默认关；配 URL 后手动开
+        ("alert_webhook_url", ""),         // 通用 JSON p2p.alert/v1（http/https 均可——可指向内网网关）
+        ("alert_window_sec", "300"),       // 三类触发共用窗口
+        ("alert_silence_sec", "1800"),     // 每类型静默窗（内不重复推送；0=不静默）
+        ("alert_login_fail_count", "10"),  // login_fail_burst 阈值（登录族四入口 IP 维聚合）
+        ("alert_register_count", "5"),     // register_burst 阈值（register+register_recover）
+        ("alert_stun_drop_count", "200"),  // stun_drop_burst 阈值（StunGuard 三分桶窗口增量）
         ("punch_retention_days", "90"),
         ("stun_rate_per_ip", "50"),
         ("stun_rate_per_device", "10"),

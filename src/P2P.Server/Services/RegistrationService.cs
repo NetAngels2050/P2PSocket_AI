@@ -27,7 +27,8 @@ public sealed class RegistrationService(
     TimeProvider? time = null,
     InvalidationPusher? invalidation = null,
     DeviceListPusher? listPusher = null,
-    RegistrationGuard? guard = null)
+    RegistrationGuard? guard = null,
+    RegistrationMetrics? metrics = null)
 {
     /// <summary>统一下发虚拟 IP 固定 .2（OQ-13：单机自连通场景无需按位分配）。</summary>
     public const string VirtualIp = "100.64.0.2";
@@ -101,6 +102,8 @@ public sealed class RegistrationService(
             await db.SaveChangesAsync();
             await audit.WriteAsync("register_recover", existing.Id,
                 detail: new { existing.MacCode, existing.RemoteCode });
+            // M5-07 注册风暴钩子（SEC-71、07 §13.1）：两成功审计点同点计数（register/register_recover）
+            if (ip is not null) metrics?.Record(ip.ToString());
 
             await SendRegisterAckAsync(session, db, msg, existing, recoveredSecret);
             session.CompleteRegistration(existing.Id, recoveredSecret);
@@ -160,6 +163,7 @@ public sealed class RegistrationService(
         }
         await db.SaveChangesAsync();
         await audit.WriteAsync("register", device.Id, detail: new { device.MacCode, device.RemoteCode });
+        if (ip is not null) metrics?.Record(ip.ToString()); // M5-07 注册风暴钩子（同上）
         if (defaultGroup.JoinPolicy == "approval")
             await audit.WriteAsync("group_join_request", device.Id,
                 detail: new { GroupId = defaultGroup.Id, Source = "register" });
