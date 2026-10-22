@@ -56,6 +56,10 @@ public sealed class ControlErrorException(int code, string httpLikeMsg)
 /// <summary>passive 模式下发送主动类消息被本地拒绝（02 §2.5；服务端同样会拒）。</summary>
 public sealed class PassiveModeException(string message) : Exception(message);
 
+/// <summary>登录族发送本地拒绝（M5-06/SEC-26，07 §10.3）：本连接 HelloAck 未携带 loginEphPub
+///（旧服务端）——不回退明文（防主动 MITM 剥字段降级）；API 层映射 5004 引导升级服务端。</summary>
+public sealed class LoginEncryptionUnavailableException(string message) : Exception(message);
+
 public sealed class ControlClient : IAsyncDisposable
 {
     private readonly ControlClientOptions _options;
@@ -77,6 +81,7 @@ public sealed class ControlClient : IAsyncDisposable
     private uint _lastPeerSeq;      // 服务端方向 seq 严格递增（防重放，镜像服务端校验）
     private int _selfSeq;           // 出站 seq 原子递增
     private bool _hmacEnabled;
+    private byte[]? _loginEphPub; // 本连接登录加密公钥（M5-06/SEC-26，07 §10.2；旧服务端=缺失）
     private long _lastHeartbeatSentAt;
     private volatile UpdateInfoResponse? _lastUpgradeInfo; // 最近版本拒答窗口取回的升级信息（M2-26）
     private PendingAck? _pending;
@@ -202,6 +207,18 @@ public sealed class ControlClient : IAsyncDisposable
 
     /// <summary>校准后时间戳（OQ-12：全部出站消息 timestampMs 用此时钟）。</summary>
     public ulong TimestampMs() => Clock.NowRemoteMs(_time);
+
+    /// <summary>登录族密码 ECIES 封装（M5-06/SEC-26，07 §10.1）：info="pcp-login-v1" 域分离、
+    /// 每次现加密（记住我重放非密文重放）。本连接未收到 loginEphPub（旧服务端）→ 本地拒绝
+    /// <see cref="LoginEncryptionUnavailableException"/>，不回退明文（OQ-21① 硬切）。</summary>
+    public byte[] BoxLoginSecret(string secret)
+    {
+        var pub = _loginEphPub;
+        if (pub is not { Length: 65 })
+            throw new LoginEncryptionUnavailableException(
+                "服务端版本过旧，不支持加密登录，请先升级服务端（password_ecies_required）");
+        return Ecies.Encrypt(pub, System.Text.Encoding.UTF8.GetBytes(secret), "pcp-login-v1"u8);
+    }
 
     /// <summary>注册完成（M1-24 向导后端在收到未签名 RegisterAck 并解出 deviceSecret 后调用；
     /// 镜像服务端 ControlSession.CompleteRegistration 的密钥派生与状态迁移）。</summary>
@@ -371,6 +388,7 @@ public sealed class ControlClient : IAsyncDisposable
         // 时钟对齐（OQ-12）：RTT/2 补偿。此后全部出站 ts 用校准后时钟
         Clock.Calibrate(helloAck.ServerTs, sentAt, LocalNowMs);
         _nonceS = helloAck.NonceS;
+        _loginEphPub = helloAck.LoginEphPub; // M5-06/SEC-26：登录族加密公钥（缺失=旧服务端，发送前本地拒）
 
         switch (helloAck.Status)
         {

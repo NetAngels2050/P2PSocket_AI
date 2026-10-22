@@ -64,8 +64,7 @@ public sealed class InvalidationTests : IAsyncLifetime
     private async Task<(TestPcpClient Client, Guid DeviceId)> ConnectLoggedInAsync(string deviceName)
     {
         var (client, deviceId) = await ConnectRegisteredAsync(deviceName);
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            DbInitializer.AdminUsername, DbInitializer.AdminUsername));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, DbInitializer.AdminUsername, "", client.BoxLoginSecret(DbInitializer.AdminUsername)));
         var login = await client.ReceiveSkippingPushesAsync<UserLoginAck>();
         Assert.True(login!.Ok);
         return (client, deviceId);
@@ -89,11 +88,9 @@ public sealed class InvalidationTests : IAsyncLifetime
     /// <summary>已注册设备注册独立用户并登录（跨账号：与 admin 无共同可见性来源时构造切断场景）。</summary>
     private async Task LoginNewUserAsync(TestPcpClient client, string username)
     {
-        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
-            username, $"{username}-password-1"));
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister, username, "", client.BoxLoginSecret($"{username}-password-1")));
         _ = await client.ReceiveSkippingPushesAsync<UserRegisterAck>();
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            username, $"{username}-password-1"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, username, "", client.BoxLoginSecret($"{username}-password-1")));
         _ = await client.ReceiveSkippingPushesAsync<UserLoginAck>();
         await DrainPushesAsync(client); // 沉降：登录收尾（audit/0x41）落定后再发起后续跨客户端请求
     }

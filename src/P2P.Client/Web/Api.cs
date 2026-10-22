@@ -36,6 +36,7 @@ internal static class Api
             DiagnosticsException de => de.Code, // 诊断族（M3-16 基类臂：stun-test 判型 1001/1002、ping-device 1001/1002/4003）
             MappingException me => me.Code,
             ControlErrorException ce => ce.Code,
+            LoginEncryptionUnavailableException => ErrorCode.VersionNotSupported, // M5-06：旧服务端本地拒绝（5004 引导升级）
             PassiveModeException => ErrorCode.ForbiddenPassive,
             ControlClientException => ErrorCode.ServerUnreachable,
             _ => ErrorCode.BadRequest,

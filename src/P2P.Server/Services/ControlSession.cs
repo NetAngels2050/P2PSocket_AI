@@ -43,6 +43,7 @@ public sealed class ControlSession : IAsyncDisposable
     private byte[] _deviceSecret = [];
     private byte[] _nonceC = [];
     private byte[] _nonceS = [];
+    private EcKeyPair? _loginEph; // 登录族临时钥（M5-06/SEC-26，07 §10.1）：Hello 生成，连接关闭即弃
     private uint _lastPeerSeq;       // 对端 seq 严格递增
     private int _selfSeqInt;         // 出站 seq（原子递增）
     private Guid _deviceId;
@@ -109,6 +110,12 @@ public sealed class ControlSession : IAsyncDisposable
 
     /// <summary>当前服务器时间戳（处理器构造回复消息头用）。</summary>
     public ulong ServerTimestamp() => NowMs64;
+
+    /// <summary>登录族密码开箱（M5-06/SEC-26，07 §10.1）：info="pcp-login-v1" 域分离；
+    /// 篡改/错钥抛 <see cref="System.Security.Cryptography.CryptographicException"/>
+    ///（调用方按凭据失败处理，不泄漏原因——A-16）。</summary>
+    public byte[] UnboxLoginSecret(byte[] boxed)
+        => Ecies.Decrypt(_loginEph!, boxed, "pcp-login-v1"u8);
 
     private long NowMs => _time.GetLocalNow().ToUnixTimeMilliseconds();
 
@@ -298,8 +305,9 @@ public sealed class ControlSession : IAsyncDisposable
                 _deviceId = devId;
                 _deviceSecret = device.DeviceSecret;
                 _nonceS = RandomGenerator.Bytes(16);
+                _loginEph = EcKeyPair.Generate(); // 登录族加密公钥随 HelloAck 下发（07 §10.1：私钥仅存会话内存）
                 await SendAsync(new HelloAck(NextSeq(), NowMs64, MsgType.Hello, _options.ServerVersion,
-                    ProtocolVersion.Current, _nonceS, HelloStatus.Ok, (ulong)NowMs), ct).ConfigureAwait(false);
+                    ProtocolVersion.Current, _nonceS, HelloStatus.Ok, (ulong)NowMs, _loginEph.ExportPublicKey()), ct).ConfigureAwait(false);
                 _state = SessionState.AwaitingProof;
                 return;
             }
@@ -311,8 +319,9 @@ public sealed class ControlSession : IAsyncDisposable
             }
         }
         _nonceS = RandomGenerator.Bytes(16);
+        _loginEph = EcKeyPair.Generate(); // 未注册路径同样先到：0x10 注册后 0x20/0x21 才发（07 §10.1 时序）
         await SendAsync(new HelloAck(NextSeq(), NowMs64, MsgType.Hello, _options.ServerVersion,
-            ProtocolVersion.Current, _nonceS, HelloStatus.NeedRegister, (ulong)NowMs), ct).ConfigureAwait(false);
+            ProtocolVersion.Current, _nonceS, HelloStatus.NeedRegister, (ulong)NowMs, _loginEph.ExportPublicKey()), ct).ConfigureAwait(false);
         _state = SessionState.NeedRegister;
     }
 
@@ -471,6 +480,7 @@ public sealed class ControlSession : IAsyncDisposable
         _sendQueue.Writer.TryComplete();
         CryptoUtil.Zero(_connMacKey);
         CryptoUtil.Zero(_deviceSecret);
+        _loginEph?.Dispose(); // 用后即焚（07 §10.1：私钥仅存会话内存，连接关闭即弃）
     }
 
     /// <summary>断连落库（FR-S-104）：在线判定在内存，超时/断连时刻持久化。</summary>

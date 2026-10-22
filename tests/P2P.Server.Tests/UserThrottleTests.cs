@@ -72,11 +72,9 @@ public sealed class UserThrottleTests : IAsyncLifetime
             key.ExportPublicKey(), null, null, null), sign: false);
         var ack = await client.ReceiveAsync<RegisterAck>() ?? throw new IOException("注册无应答");
         client.EstablishWithSecret(Ecies.Decrypt(key, ack.DeviceSecretBox));
-        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
-            username, password));
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister, username, "", client.BoxLoginSecret(password)));
         _ = await client.ReceiveAsync<UserRegisterAck>();
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            username, password));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, username, "", client.BoxLoginSecret(password)));
         var login = await RequireCompletedAsync(client.ReceiveAsync<UserLoginAck>());
         Assert.True(login!.Ok);
         return client;
@@ -93,8 +91,7 @@ public sealed class UserThrottleTests : IAsyncLifetime
     /// <summary>阶梯延迟期间的 0x21：FakeTimeProvider 50ms 步进推进放行（轮询防服务端未入延迟的竞态）。</summary>
     private async Task<UserLoginAck> LoginWithAdvanceAsync(TestPcpClient client, string username, string password)
     {
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            username, password));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, username, "", client.BoxLoginSecret(password)));
         var recv = client.ReceiveAsync<UserLoginAck>();
         for (var i = 0; i < 400 && !recv.IsCompleted; i++)
         {
@@ -108,8 +105,7 @@ public sealed class UserThrottleTests : IAsyncLifetime
     private async Task<UserChangePasswordAck> ChangePasswordWithAdvanceAsync(
         TestPcpClient client, string oldPassword, string newPassword)
     {
-        await client.SendAsync(new UserChangePassword(client.NextSeq(), client.Now(),
-            MsgType.UserChangePassword, oldPassword, newPassword));
+        await client.SendAsync(new UserChangePassword(client.NextSeq(), client.Now(), MsgType.UserChangePassword, "", "", client.BoxLoginSecret(oldPassword), client.BoxLoginSecret(newPassword)));
         var recv = client.ReceiveAsync<UserChangePasswordAck>();
         for (var i = 0; i < 400 && !recv.IsCompleted; i++)
         {
@@ -133,8 +129,7 @@ public sealed class UserThrottleTests : IAsyncLifetime
         // 会话保持 normal（0x21 为主动类——passive 会被 2002 拒，02 §2.5；失败尝试在 normal 会话上发）
 
         // 第 1 次失败无延迟即时应答；第 2 次 500ms 档（推进放行）——延迟后仍是正常失败应答（不设专用码）
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            user, "wrong-1"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, user, "", client.BoxLoginSecret("wrong-1")));
         Assert.False((await RequireCompletedAsync(client.ReceiveAsync<UserLoginAck>()))!.Ok);
         Assert.False((await LoginWithAdvanceAsync(client, user, "wrong-2")).Ok);
 
@@ -146,8 +141,7 @@ public sealed class UserThrottleTests : IAsyncLifetime
 
         // 窗衰减：901s > 900s 窗 → 双维归零，无推进即应答（正常用户零感知回归）
         _time.Advance(TimeSpan.FromSeconds(901));
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            user, pass));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, user, "", client.BoxLoginSecret(pass)));
         Assert.True((await RequireCompletedAsync(client.ReceiveAsync<UserLoginAck>()))!.Ok);
 
         Assert.Equal(2, await AuditCountAsync("login_failed"));
@@ -162,8 +156,7 @@ public sealed class UserThrottleTests : IAsyncLifetime
         var client = await ConnectLoggedInAsync(user, pass);
 
         // 0x21 失败 1 次（acct=1/ip=1）
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            user, "wrong"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, user, "", client.BoxLoginSecret("wrong")));
         Assert.False((await RequireCompletedAsync(client.ReceiveAsync<UserLoginAck>()))!.Ok);
 
         // 0x23 错旧密码：账户维共享 0x21 失败 → 已上 500ms 档（推进放行）；Ack 仍正常失败语义

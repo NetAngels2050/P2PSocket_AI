@@ -220,7 +220,7 @@ public sealed class ControlClientIntegrationTests : IAsyncLifetime
 
         var login = await client.SendRequestAsync<UserLoginAck>(new UserLogin(
             client.NextSeq(), client.TimestampMs(), MsgType.UserLogin,
-            DbInitializer.AdminUsername, DbInitializer.AdminUsername));
+            DbInitializer.AdminUsername, "", client.BoxLoginSecret(DbInitializer.AdminUsername)));
         Assert.True(login.Ok);
         Assert.Equal(CapabilityMode.Normal, client.Capability);
 

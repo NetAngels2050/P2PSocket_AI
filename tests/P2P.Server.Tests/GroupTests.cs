@@ -71,8 +71,7 @@ public sealed class GroupTests : IAsyncLifetime
         var ack = await client.ReceiveAsync<RegisterAck>() ?? throw new IOException("注册无应答");
         client.EstablishWithSecret(Ecies.Decrypt(key, ack.DeviceSecretBox));
 
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            DbInitializer.AdminUsername, DbInitializer.AdminUsername));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, DbInitializer.AdminUsername, "", client.BoxLoginSecret(DbInitializer.AdminUsername)));
         var login = await client.ReceiveAsync<UserLoginAck>();
         Assert.True(login!.Ok);
         return (client, ack.DeviceId);
@@ -214,11 +213,9 @@ public sealed class GroupTests : IAsyncLifetime
 
         // 第二个 admin 账号设备（同内置 admin——组 owner 即 admin，故改用独立用户构造非所有者）
         var (intruder, _) = await ConnectRegisteredAsync("intruder");
-        await intruder.SendAsync(new UserRegister(intruder.NextSeq(), intruder.Now(), MsgType.UserRegister,
-            "eve", "eve-password-1"));
+        await intruder.SendAsync(new UserRegister(intruder.NextSeq(), intruder.Now(), MsgType.UserRegister, "eve", "", intruder.BoxLoginSecret("eve-password-1")));
         _ = await intruder.ReceiveAsync<UserRegisterAck>();
-        await intruder.SendAsync(new UserLogin(intruder.NextSeq(), intruder.Now(), MsgType.UserLogin,
-            "eve", "eve-password-1"));
+        await intruder.SendAsync(new UserLogin(intruder.NextSeq(), intruder.Now(), MsgType.UserLogin, "eve", "", intruder.BoxLoginSecret("eve-password-1")));
         _ = await intruder.ReceiveAsync<UserLoginAck>();
 
         await intruder.SendAsync(new GroupUpdate(intruder.NextSeq(), intruder.Now(), MsgType.GroupUpdate,
@@ -232,11 +229,9 @@ public sealed class GroupTests : IAsyncLifetime
     /// <summary>已注册设备注册独立用户并登录（默认 username 同密码）。</summary>
     private async Task LoginNewUserAsync(TestPcpClient client, string username)
     {
-        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
-            username, $"{username}-password-1"));
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister, username, "", client.BoxLoginSecret($"{username}-password-1")));
         _ = await client.ReceiveAsync<UserRegisterAck>();
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            username, $"{username}-password-1"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, username, "", client.BoxLoginSecret($"{username}-password-1")));
         _ = await client.ReceiveAsync<UserLoginAck>();
     }
 
@@ -602,8 +597,7 @@ public sealed class GroupTests : IAsyncLifetime
         }
 
         // A 登录建组 G（A 即首成员，M2-09），B 直接写库加入
-        await a.SendAsync(new UserLogin(a.NextSeq(), a.Now(), MsgType.UserLogin,
-            DbInitializer.AdminUsername, DbInitializer.AdminUsername));
+        await a.SendAsync(new UserLogin(a.NextSeq(), a.Now(), MsgType.UserLogin, DbInitializer.AdminUsername, "", a.BoxLoginSecret(DbInitializer.AdminUsername)));
         _ = await a.ReceiveAsync<UserLoginAck>();
         await a.SendAsync(new GroupCreate(a.NextSeq(), a.Now(), MsgType.GroupCreate, "临时组", JoinPolicy.Free));
         var created = await a.ReceiveAsync<GroupCreateAck>();

@@ -89,11 +89,9 @@ public sealed class AdminServiceTests : IAsyncLifetime
     /// <summary>注册独立用户并登录（用户禁用目标：名下在线设备）。</summary>
     private async Task LoginNewUserAsync(TestPcpClient client, string username)
     {
-        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
-            username, $"{username}-password-1"));
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister, username, "", client.BoxLoginSecret($"{username}-password-1")));
         _ = await client.ReceiveSkippingPushesAsync<UserRegisterAck>();
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            username, $"{username}-password-1"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, username, "", client.BoxLoginSecret($"{username}-password-1")));
         _ = await client.ReceiveSkippingPushesAsync<UserLoginAck>();
         await DrainPushesAsync(client); // 沉降：登录收尾落定后再发起后续跨客户端请求
     }
@@ -226,8 +224,7 @@ public sealed class AdminServiceTests : IAsyncLifetime
         var helloAck = await c.HelloAsync(aId);
         Assert.Equal(HelloStatus.Ok, helloAck.Status);
         await c.ProofAsync(aSecret);
-        await c.SendAsync(new UserLogin(c.NextSeq(), c.Now(), MsgType.UserLogin,
-            "adm-user1", "adm-user1-password-1"));
+        await c.SendAsync(new UserLogin(c.NextSeq(), c.Now(), MsgType.UserLogin, "adm-user1", "", c.BoxLoginSecret("adm-user1-password-1")));
         var login = await c.ReceiveSkippingPushesAsync<UserLoginAck>();
         Assert.True(login!.Ok);
         Assert.Equal(CapabilityMode.Normal, login.Mode);

@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using P2P.Core.Crypto;
 using P2P.Core.Protocol;
@@ -27,7 +29,8 @@ public sealed class UserService(
 {
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
-    /// <summary>0x20 用户注册：registration_open=0 → 2004；用户名占用 → Ack Ok=false。</summary>
+    /// <summary>0x20 用户注册：registration_open=0 → 2004；用户名占用 → Ack Ok=false。
+    /// M5-06/SEC-26：密码经 PasswordBox（ECIES）；缺失/明文非空 → 5004 硬切（07 §10.3，无明文双轨）。</summary>
     public async Task HandleUserRegisterAsync(ControlSession session, UserRegister msg)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
@@ -36,7 +39,12 @@ public sealed class UserService(
             await session.SendErrorAsync(ErrorCode.RegistrationClosed, "registration_closed");
             return;
         }
-        if (string.IsNullOrWhiteSpace(msg.Username) || msg.Password.Length < 6)
+        if (UnboxLoginPassword(session, msg.PasswordBox, msg.Password, out var password) == UnboxOutcome.HardCut)
+        {
+            await session.SendErrorAsync(ErrorCode.VersionNotSupported, "password_ecies_required");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(msg.Username) || password.Length < 6)
         {
             await session.SendAsync(new UserRegisterAck(session.NextSeq(), session.ServerTimestamp(),
                 MsgType.UserRegister, false));
@@ -54,7 +62,7 @@ public sealed class UserService(
         {
             Id = Guid.NewGuid(),
             Username = msg.Username,
-            PasswordHash = PasswordHasher.Hash(msg.Password),
+            PasswordHash = PasswordHasher.Hash(password),
             CreatedAt = now,
             UpdatedAt = now,
         });
@@ -64,17 +72,25 @@ public sealed class UserService(
     }
 
     /// <summary>0x21 登录：凭据校验 → 设备 owner 绑定 + 能力切 normal + token（FR-S-106）。
-    /// 防爆破（M5-04/07 §11）：双维延迟先于校验；失败计双维+阶跃审计；成功复位仅账户维。</summary>
+    /// 防爆破（M5-04/07 §11）：双维延迟先于校验；失败计双维+阶跃审计；成功复位仅账户维。
+    /// M5-06/SEC-26：密码经 PasswordBox；缺失/明文非空 → 5004 硬切（先于延迟——格式闸不构成凭据 oracle）；
+    /// 解密失败并入凭据失败口径（不泄漏原因，07 §10.3）。</summary>
     public async Task HandleLoginAsync(ControlSession session, UserLogin msg)
     {
+        var unbox = UnboxLoginPassword(session, msg.PasswordBox, msg.Password, out var password);
+        if (unbox == UnboxOutcome.HardCut)
+        {
+            await session.SendErrorAsync(ErrorCode.VersionNotSupported, "password_ecies_required");
+            return;
+        }
         await using var db = await dbFactory.CreateDbContextAsync();
         var ip = session.RemoteEndPoint?.Address.ToString();
         await WaitThrottleAsync(throttle?.LoginDelayMs(msg.Username, ip)); // 先于凭据校验（A-15 含正确登录）
 
         var user = await db.Users.AsNoTracking()
             .SingleOrDefaultAsync(u => u.Username == msg.Username);
-        var ok = user is not null && !user.Disabled
-            && PasswordHasher.Verify(msg.Password, user.PasswordHash);
+        var ok = unbox == UnboxOutcome.Ok && user is not null && !user.Disabled
+            && PasswordHasher.Verify(password, user.PasswordHash);
         if (!ok)
         {
             await audit.WriteAsync("login_failed", session.DeviceId, detail: new { msg.Username });
@@ -114,7 +130,8 @@ public sealed class UserService(
 
     /// <summary>0x23 修改自己密码（M2-27，FR-S-205；主动类——passive 拒 2002）：
     /// 旧密码校验失败/未登录 → Ack Ok=false（不泄漏具体原因）；成功覆写 hash 并审计。
-    /// 防爆破（M5-04/07 §11）：与 0x21 同双维同键——账户维共享使改密失败同样抬高登录延迟（反之亦然）。</summary>
+    /// 防爆破（M5-04/07 §11）：与 0x21 同双维同键——账户维共享使改密失败同样抬高登录延迟（反之亦然）。
+    /// M5-06/SEC-26：旧/新密码分别经 Old/NewPasswordBox；任一缺失或明文非空 → 5004 硬切（07 §10.3）。</summary>
     public async Task HandleChangePasswordAsync(ControlSession session, UserChangePassword msg)
     {
         if (session.OwnerUserId is not { } userId)
@@ -122,14 +139,22 @@ public sealed class UserService(
             await session.SendErrorAsync(ErrorCode.Unauthorized, "login_required");
             return;
         }
+        var oldUnbox = UnboxLoginPassword(session, msg.OldPasswordBox, msg.OldPassword, out var oldPassword);
+        var newUnbox = UnboxLoginPassword(session, msg.NewPasswordBox, msg.NewPassword, out var newPassword);
+        if (oldUnbox == UnboxOutcome.HardCut || newUnbox == UnboxOutcome.HardCut)
+        {
+            await session.SendErrorAsync(ErrorCode.VersionNotSupported, "password_ecies_required");
+            return;
+        }
         await using var db = await dbFactory.CreateDbContextAsync();
         var user = await db.Users.SingleOrDefaultAsync(u => u.Id == userId);
         var ip = session.RemoteEndPoint?.Address.ToString();
         await WaitThrottleAsync(throttle?.LoginDelayMs(user?.Username, ip)); // 先于凭据校验
         if (user is null || user.Disabled
-            || string.IsNullOrEmpty(msg.OldPassword)
-            || msg.NewPassword.Length < 6
-            || !PasswordHasher.Verify(msg.OldPassword, user.PasswordHash))
+            || oldUnbox == UnboxOutcome.Corrupt || newUnbox == UnboxOutcome.Corrupt
+            || string.IsNullOrEmpty(oldPassword)
+            || newPassword.Length < 6
+            || !PasswordHasher.Verify(oldPassword, user.PasswordHash))
         {
             await audit.WriteAsync("password_change_failed", session.DeviceId, userId: userId);
             if (throttle is not null && user is not null)
@@ -142,7 +167,7 @@ public sealed class UserService(
             return;
         }
         throttle?.Reset(LoginThrottle.DimAccount, user.Username); // 凭据成功同复位（仅账户维）
-        user.PasswordHash = PasswordHasher.Hash(msg.NewPassword);
+        user.PasswordHash = PasswordHasher.Hash(newPassword);
         user.UpdatedAt = _time.GetLocalNow().UtcDateTime;
         await db.SaveChangesAsync();
         await audit.WriteAsync("password_change", session.DeviceId, userId: userId);
@@ -155,6 +180,28 @@ public sealed class UserService(
     {
         if (delayMs is > 0)
             await Task.Delay(TimeSpan.FromMilliseconds(delayMs.Value), _time);
+    }
+
+    /// <summary>登录族开箱结果：Ok=取得明文；HardCut=缺 Box/明文非空（5004 硬切，07 §10.3）；
+    /// Corrupt=解密失败（篡改/错钥——并入凭据失败口径，不泄漏原因）。</summary>
+    private enum UnboxOutcome { Ok, HardCut, Corrupt }
+
+    /// <summary>登录族密码开箱（M5-06/SEC-26，07 §10.3 硬切口径：无明文过渡双轨）。</summary>
+    private static UnboxOutcome UnboxLoginPassword(ControlSession session, byte[]? box,
+        string legacyPlain, out string password)
+    {
+        password = "";
+        if (box is null || box.Length == 0 || legacyPlain.Length > 0)
+            return UnboxOutcome.HardCut;
+        try
+        {
+            password = Encoding.UTF8.GetString(session.UnboxLoginSecret(box));
+            return UnboxOutcome.Ok;
+        }
+        catch (CryptographicException)
+        {
+            return UnboxOutcome.Corrupt;
+        }
     }
 
     /// <summary>记一维失败+阶跃审计（07 §11.3：延迟值跨档才记——每窗 ≤5 条/键；detail=维名+键值+fails+delayMs）。</summary>

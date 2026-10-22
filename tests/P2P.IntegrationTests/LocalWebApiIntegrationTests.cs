@@ -270,7 +270,7 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
             // L2：会话归属 admin 后可见同账号设备（与 MappingSync 测试同构）
             var login = await stack.Control.SendRequestAsync<UserLoginAck>(new UserLogin(
                 stack.Control.NextSeq(), stack.Control.TimestampMs(), MsgType.UserLogin,
-                DbInitializer.AdminUsername, DbInitializer.AdminUsername));
+                DbInitializer.AdminUsername, "", stack.Control.BoxLoginSecret(DbInitializer.AdminUsername)));
             Assert.True(login!.Ok);
         }
 

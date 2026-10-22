@@ -100,11 +100,9 @@ public sealed class AdminDashboardApiTests : IAsyncLifetime
             sign: false);
         var ack = await client.ReceiveSkippingPushesAsync<RegisterAck>() ?? throw new IOException("注册无应答");
         client.EstablishWithSecret(Ecies.Decrypt(key, ack.DeviceSecretBox));
-        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
-            username, $"{username}-pass-1"));
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister, username, "", client.BoxLoginSecret($"{username}-pass-1")));
         _ = await client.ReceiveSkippingPushesAsync<UserRegisterAck>();
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            username, $"{username}-pass-1"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, username, "", client.BoxLoginSecret($"{username}-pass-1")));
         var login = await client.ReceiveSkippingPushesAsync<UserLoginAck>() ?? throw new IOException("登录无应答");
         Assert.True(login.Ok);
         return (client, ack.DeviceId);

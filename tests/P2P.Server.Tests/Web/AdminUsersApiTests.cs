@@ -101,11 +101,9 @@ public sealed class AdminUsersApiTests : IAsyncLifetime
         var ack = await client.ReceiveSkippingPushesAsync<RegisterAck>() ?? throw new IOException("注册无应答");
         client.EstablishWithSecret(Ecies.Decrypt(key, ack.DeviceSecretBox));
 
-        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
-            username, $"{username}-pass-1"));
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister, username, "", client.BoxLoginSecret($"{username}-pass-1")));
         _ = await client.ReceiveSkippingPushesAsync<UserRegisterAck>();
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            username, $"{username}-pass-1"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, username, "", client.BoxLoginSecret($"{username}-pass-1")));
         var login = await client.ReceiveSkippingPushesAsync<UserLoginAck>() ?? throw new IOException("登录无应答");
         Assert.True(login.Ok);
         await using var db = CreateDb();
@@ -186,14 +184,14 @@ public sealed class AdminUsersApiTests : IAsyncLifetime
             sign: false);
         var ack2 = await c2.ReceiveSkippingPushesAsync<RegisterAck>();
         c2.EstablishWithSecret(Ecies.Decrypt(key, ack2!.DeviceSecretBox));
-        await c2.SendAsync(new UserLogin(c2.NextSeq(), c2.Now(), MsgType.UserLogin, "bob", "bob-pass-1"));
+        await c2.SendAsync(new UserLogin(c2.NextSeq(), c2.Now(), MsgType.UserLogin, "bob", "", c2.BoxLoginSecret("bob-pass-1")));
         var denied = await c2.ReceiveSkippingPushesAsync<UserLoginAck>();
         Assert.False(denied!.Ok);
 
         // enable 放行：重新登录成功
         Assert.Equal(HttpStatusCode.OK,
             (await _http.PostAsync($"/api/users/{userId}/enable", null)).StatusCode);
-        await c2.SendAsync(new UserLogin(c2.NextSeq(), c2.Now(), MsgType.UserLogin, "bob", "bob-pass-1"));
+        await c2.SendAsync(new UserLogin(c2.NextSeq(), c2.Now(), MsgType.UserLogin, "bob", "", c2.BoxLoginSecret("bob-pass-1")));
         var ok = await c2.ReceiveSkippingPushesAsync<UserLoginAck>();
         Assert.True(ok!.Ok);
         Assert.Equal(1, await AuditCountAsync("user_enable"));
@@ -225,9 +223,9 @@ public sealed class AdminUsersApiTests : IAsyncLifetime
             sign: false);
         var ack = await c.ReceiveSkippingPushesAsync<RegisterAck>();
         c.EstablishWithSecret(Ecies.Decrypt(key, ack!.DeviceSecretBox));
-        await c.SendAsync(new UserLogin(c.NextSeq(), c.Now(), MsgType.UserLogin, "carol", "carol-pass-1"));
+        await c.SendAsync(new UserLogin(c.NextSeq(), c.Now(), MsgType.UserLogin, "carol", "", c.BoxLoginSecret("carol-pass-1")));
         Assert.False((await c.ReceiveSkippingPushesAsync<UserLoginAck>())!.Ok);
-        await c.SendAsync(new UserLogin(c.NextSeq(), c.Now(), MsgType.UserLogin, "carol", temp));
+        await c.SendAsync(new UserLogin(c.NextSeq(), c.Now(), MsgType.UserLogin, "carol", "", c.BoxLoginSecret(temp)));
         Assert.True((await c.ReceiveSkippingPushesAsync<UserLoginAck>())!.Ok);
     }
 

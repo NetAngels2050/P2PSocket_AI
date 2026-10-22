@@ -75,8 +75,7 @@ public sealed class MappingTests : IAsyncLifetime
 
         if (login)
         {
-            await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-                DbInitializer.AdminUsername, DbInitializer.AdminUsername));
+            await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, DbInitializer.AdminUsername, "", client.BoxLoginSecret(DbInitializer.AdminUsername)));
             var loginAck = await client.ReceiveAsync<UserLoginAck>();
             Assert.True(loginAck!.Ok);
         }

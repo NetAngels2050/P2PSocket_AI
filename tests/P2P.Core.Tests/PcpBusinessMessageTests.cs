@@ -27,6 +27,39 @@ public class PcpBusinessMessageTests
         MsgAssert.Equal(logout, PcpCodec.Decode<UserLogout>(PcpCodec.Encode(logout)));
     }
 
+    // ── M5-06/SEC-26（07 §10.2）：登录族 passwordBox 尾部加法 ────────────
+
+    [Fact]
+    public void LoginFamily_BoxFields_RoundTrip_AndOldWireTolerance()
+    {
+        var box = new byte[] { 1, 65, 12, 33 }; // 载荷形态即可（编解码层不解密）
+        var reg = new UserRegister(1, 1UL, MsgType.UserRegister, "alice", "", box);
+        MsgAssert.Equal(reg, PcpCodec.Decode<UserRegister>(PcpCodec.Encode(reg)));
+
+        var login = new UserLogin(2, 2UL, MsgType.UserLogin, "alice", "", box);
+        MsgAssert.Equal(login, PcpCodec.Decode<UserLogin>(PcpCodec.Encode(login)));
+
+        var chpw = new UserChangePassword(3, 3UL, MsgType.UserChangePassword, "", "", box, box);
+        MsgAssert.Equal(chpw, PcpCodec.Decode<UserChangePassword>(PcpCodec.Encode(chpw)));
+
+        // 旧端数组（M5 前无 Box 字段）：尾部缺失容忍 → null
+        var loginWire = PcpCodec.Encode(login with { PasswordBox = null });
+        Assert.Equal(0x96, loginWire[0]); // fixarray(6，尾部 nil 占位)
+        var oldLogin = loginWire[..^1];   // 去掉尾部 nil
+        oldLogin[0] = 0x95;               // fixarray(5)
+        var oldLoginDecoded = PcpCodec.Decode<UserLogin>(oldLogin);
+        Assert.Null(oldLoginDecoded.PasswordBox);
+        Assert.Equal("alice", oldLoginDecoded.Username);
+
+        var chpwWire = PcpCodec.Encode(chpw with { OldPasswordBox = null, NewPasswordBox = null });
+        Assert.Equal(0x97, chpwWire[0]); // fixarray(7，两个尾部 nil 占位)
+        var oldChpw = chpwWire[..^2];    // 去掉两个尾部 nil
+        oldChpw[0] = 0x95;               // fixarray(5)
+        var oldChpwDecoded = PcpCodec.Decode<UserChangePassword>(oldChpw);
+        Assert.Null(oldChpwDecoded.OldPasswordBox);
+        Assert.Null(oldChpwDecoded.NewPasswordBox);
+    }
+
     [Fact]
     public void GroupFamily_RoundTrip()
     {

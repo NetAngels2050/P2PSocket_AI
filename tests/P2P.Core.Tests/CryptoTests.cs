@@ -69,6 +69,26 @@ public class CryptoTests
         Assert.ThrowsAny<CryptographicException>(() => Ecies.Decrypt(clientKey, boxed));
     }
 
+    // ── M5-06/SEC-26（07 §10.1）：登录族 info 域分离 ─────────────────────
+
+    [Fact]
+    public void Ecies_InfoDomainSeparation_LoginFamilyIsolated()
+    {
+        using var key = EcKeyPair.Generate();
+        var secret = "probe-password"u8.ToArray();
+
+        // 登录族封装：pcp-login-v1 往返一致；注册族 info 解不开（域分离——防跨用途密文混用）
+        var loginBox = Ecies.Encrypt(key.ExportPublicKey(), secret, "pcp-login-v1"u8);
+        Assert.Equal(secret, Ecies.Decrypt(key, loginBox, "pcp-login-v1"u8));
+        Assert.ThrowsAny<CryptographicException>(
+            () => Ecies.Decrypt(key, loginBox, "p2p-ecies"u8));
+
+        // 反向：注册族密文同样不能被登录族 info 解开
+        var regBox = Ecies.Encrypt(key.ExportPublicKey(), secret);
+        Assert.ThrowsAny<CryptographicException>(
+            () => Ecies.Decrypt(key, regBox, "pcp-login-v1"u8));
+    }
+
     [Fact]
     public void Ecies_WrongKey_Rejected()
     {

@@ -42,6 +42,12 @@ public sealed class RegistrationService(
             await session.SendErrorAsync(ErrorCode.BadRequest, "register_in_wrong_state");
             return;
         }
+        if (!string.IsNullOrEmpty(msg.Password))
+        {
+            // 死字段封堵（M5-06/SEC-26，07 §10.3）：Password 双端从未使用——非空即按平行明文通路 5004 硬拒
+            await session.SendErrorAsync(ErrorCode.VersionNotSupported, "password_ecies_required");
+            return;
+        }
 
         await using var db = await dbFactory.CreateDbContextAsync();
         var config = new ServerConfigStore(db);

@@ -79,8 +79,7 @@ public sealed class UserTests : IAsyncLifetime
     {
         var client = await ConnectRegisteredAsync();
 
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            DbInitializer.AdminUsername, DbInitializer.AdminUsername));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, DbInitializer.AdminUsername, "", client.BoxLoginSecret(DbInitializer.AdminUsername)));
         var ack = await client.ReceiveAsync<UserLoginAck>();
         Assert.NotNull(ack);
         Assert.True(ack!.Ok);
@@ -101,8 +100,7 @@ public sealed class UserTests : IAsyncLifetime
     public async Task Login_WrongPassword_Rejected()
     {
         var client = await ConnectRegisteredAsync();
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            DbInitializer.AdminUsername, "wrong-password"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, DbInitializer.AdminUsername, "", client.BoxLoginSecret("wrong-password")));
         var ack = await client.ReceiveAsync<UserLoginAck>();
         Assert.NotNull(ack);
         Assert.False(ack!.Ok);
@@ -233,22 +231,19 @@ public sealed class UserTests : IAsyncLifetime
     public async Task UserRegister_OpenSwitch_CreatesAndCanLogin()
     {
         var client = await ConnectRegisteredAsync();
-        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
-            "alice", "alice-password"));
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister, "alice", "", client.BoxLoginSecret("alice-password")));
         var ack = await client.ReceiveAsync<UserRegisterAck>();
         Assert.NotNull(ack);
         Assert.True(ack!.Ok);
 
         // 新用户可登录
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            "alice", "alice-password"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, "alice", "", client.BoxLoginSecret("alice-password")));
         var login = await client.ReceiveAsync<UserLoginAck>();
         Assert.True(login!.Ok);
 
         // 用户名占用 → Ok=false
         var client2 = await ConnectRegisteredAsync();
-        await client2.SendAsync(new UserRegister(client2.NextSeq(), client2.Now(), MsgType.UserRegister,
-            "alice", "another-pass"));
+        await client2.SendAsync(new UserRegister(client2.NextSeq(), client2.Now(), MsgType.UserRegister, "alice", "", client2.BoxLoginSecret("another-pass")));
         var dup = await client2.ReceiveAsync<UserRegisterAck>();
         Assert.False(dup!.Ok);
     }
@@ -264,8 +259,7 @@ public sealed class UserTests : IAsyncLifetime
         }
 
         var client = await ConnectRegisteredAsync();
-        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
-            "bob", "bob-password-1"));
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister, "bob", "", client.BoxLoginSecret("bob-password-1")));
         var error = await client.ReceiveAsync<ErrorMessage>();
         Assert.NotNull(error);
         Assert.Equal(ErrorCode.RegistrationClosed, error!.Code);
@@ -277,28 +271,23 @@ public sealed class UserTests : IAsyncLifetime
     public async Task ChangePassword_WrongOldOrTooShortNew_OkFalse()
     {
         var client = await ConnectRegisteredAsync();
-        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
-            "carol", "carol-password"));
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister, "carol", "", client.BoxLoginSecret("carol-password")));
         _ = await client.ReceiveAsync<UserRegisterAck>();
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            "carol", "carol-password"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, "carol", "", client.BoxLoginSecret("carol-password")));
         Assert.True((await client.ReceiveAsync<UserLoginAck>())!.Ok);
 
         // 旧密码错误 → Ok=false（不泄漏原因）
-        await client.SendAsync(new UserChangePassword(client.NextSeq(), client.Now(), MsgType.UserChangePassword,
-            "wrong-old", "carol-newpass"));
+        await client.SendAsync(new UserChangePassword(client.NextSeq(), client.Now(), MsgType.UserChangePassword, "", "", client.BoxLoginSecret("wrong-old"), client.BoxLoginSecret("carol-newpass")));
         var wrong = await client.ReceiveAsync<UserChangePasswordAck>();
         Assert.False(wrong!.Ok);
 
         // 新密码过短 → Ok=false（05 §3：≥6 字符）
-        await client.SendAsync(new UserChangePassword(client.NextSeq(), client.Now(), MsgType.UserChangePassword,
-            "carol-password", "123"));
+        await client.SendAsync(new UserChangePassword(client.NextSeq(), client.Now(), MsgType.UserChangePassword, "", "", client.BoxLoginSecret("carol-password"), client.BoxLoginSecret("123")));
         var shortNew = await client.ReceiveAsync<UserChangePasswordAck>();
         Assert.False(shortNew!.Ok);
 
         // 原密码仍可登录（未变更）
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            "carol", "carol-password"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, "carol", "", client.BoxLoginSecret("carol-password")));
         Assert.True((await client.ReceiveAsync<UserLoginAck>())!.Ok);
     }
 
@@ -306,26 +295,21 @@ public sealed class UserTests : IAsyncLifetime
     public async Task ChangePassword_Success_OverwritesAndOldFails()
     {
         var client = await ConnectRegisteredAsync();
-        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
-            "dave", "dave-password"));
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister, "dave", "", client.BoxLoginSecret("dave-password")));
         _ = await client.ReceiveAsync<UserRegisterAck>();
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            "dave", "dave-password"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, "dave", "", client.BoxLoginSecret("dave-password")));
         Assert.True((await client.ReceiveAsync<UserLoginAck>())!.Ok);
 
-        await client.SendAsync(new UserChangePassword(client.NextSeq(), client.Now(), MsgType.UserChangePassword,
-            "dave-password", "dave-newpass-9"));
+        await client.SendAsync(new UserChangePassword(client.NextSeq(), client.Now(), MsgType.UserChangePassword, "", "", client.BoxLoginSecret("dave-password"), client.BoxLoginSecret("dave-newpass-9")));
         var ack = await client.ReceiveAsync<UserChangePasswordAck>();
         Assert.True(ack!.Ok);
         await using (var db = CreateDb())
             Assert.True(await db.WaitAuditAsync(a => a.Event == "password_change"));
 
         // 旧密码失效、新密码可登录
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            "dave", "dave-password"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, "dave", "", client.BoxLoginSecret("dave-password")));
         Assert.False((await client.ReceiveAsync<UserLoginAck>())!.Ok);
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            "dave", "dave-newpass-9"));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, "dave", "", client.BoxLoginSecret("dave-newpass-9")));
         Assert.True((await client.ReceiveAsync<UserLoginAck>())!.Ok);
     }
 
@@ -333,8 +317,7 @@ public sealed class UserTests : IAsyncLifetime
     public async Task ChangePassword_Unlogged_2001()
     {
         var client = await ConnectRegisteredAsync(); // 未登录
-        await client.SendAsync(new UserChangePassword(client.NextSeq(), client.Now(), MsgType.UserChangePassword,
-            "whatever", "newpass-123"));
+        await client.SendAsync(new UserChangePassword(client.NextSeq(), client.Now(), MsgType.UserChangePassword, "", "", client.BoxLoginSecret("whatever"), client.BoxLoginSecret("newpass-123")));
         var error = await client.ReceiveAsync<ErrorMessage>();
         Assert.Equal(ErrorCode.Unauthorized, error!.Code);
     }

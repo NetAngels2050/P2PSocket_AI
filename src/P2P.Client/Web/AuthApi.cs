@@ -75,7 +75,7 @@ public static class AuthApi
                     throw new ApiException(ErrorCode.BadRequest, "新密码至少 6 字符");
                 var ack = await control.SendRequestAsync<UserChangePasswordAck>(seq => new UserChangePassword(
                     seq, control.TimestampMs(), MsgType.UserChangePassword,
-                    oldPassword, newPassword), ct);
+                    "", "", control.BoxLoginSecret(oldPassword), control.BoxLoginSecret(newPassword)), ct);
                 if (!ack.Ok)
                     throw new ApiException(ErrorCode.Unauthorized, "旧密码错误或修改被拒绝");
                 // P2 方案 a：改密成功同步更新记住的凭据（防重启后自动重放旧密码失败）

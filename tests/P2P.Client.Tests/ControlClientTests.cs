@@ -78,4 +78,15 @@ public sealed class ControlClientTests
     [Fact]
     public void serverAddrs为空_构造即拒()
         => Assert.Throws<ArgumentException>(() => new ControlClient(Array.Empty<string>()));
+
+    /// <summary>M5-06/SEC-26（07 §10.3）：HelloAck 无 loginEphPub（旧服务端）时登录族发送
+    /// 前置检查本地拒绝——不回退明文（OQ-21① 硬切）。未连接客户端与旧服务端连接同形态
+    ///（_loginEphPub 缺失），分支覆盖等价；连接失败在后台退避循环，不干扰断言。</summary>
+    [Fact]
+    public async Task 旧服务端形态_BoxLoginSecret本地拒绝_不回退明文()
+    {
+        await using var client = new ControlClient(new[] { "127.0.0.1:1" });
+        var ex = Assert.Throws<LoginEncryptionUnavailableException>(() => client.BoxLoginSecret("pw"));
+        Assert.Contains("服务端版本过旧", ex.Message); // UI/日志文案（API 层映射 5004）
+    }
 }

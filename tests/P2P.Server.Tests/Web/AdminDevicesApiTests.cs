@@ -102,11 +102,9 @@ public sealed class AdminDevicesApiTests : IAsyncLifetime
         Guid? userId = null;
         if (username is not null)
         {
-            await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
-                username, $"{username}-pass-1"));
+            await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister, username, "", client.BoxLoginSecret($"{username}-pass-1")));
             _ = await client.ReceiveSkippingPushesAsync<UserRegisterAck>();
-            await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-                username, $"{username}-pass-1"));
+            await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, username, "", client.BoxLoginSecret($"{username}-pass-1")));
             var login = await client.ReceiveSkippingPushesAsync<UserLoginAck>() ?? throw new IOException("登录无应答");
             Assert.True(login.Ok);
             await using var db = CreateDb();

@@ -62,8 +62,7 @@ public sealed class LanSegmentTests : IAsyncLifetime
     private async Task<(TestPcpClient Client, Guid DeviceId)> ConnectLoggedInAsync(string deviceName)
     {
         var (client, deviceId) = await ConnectRegisteredAsync(deviceName);
-        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin,
-            DbInitializer.AdminUsername, DbInitializer.AdminUsername));
+        await client.SendAsync(new UserLogin(client.NextSeq(), client.Now(), MsgType.UserLogin, DbInitializer.AdminUsername, "", client.BoxLoginSecret(DbInitializer.AdminUsername)));
         var login = await client.ReceiveAsync<UserLoginAck>();
         Assert.True(login!.Ok);
         return (client, deviceId);

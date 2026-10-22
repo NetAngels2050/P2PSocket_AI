@@ -22,6 +22,27 @@ public class PcpBasicMessageTests
         MsgAssert.Equal(msg, PcpCodec.Decode<HelloAck>(PcpCodec.Encode(msg)));
     }
 
+    // ── M5-06/SEC-26（07 §10.2）：loginEphPub 尾部加法 ───────────────────
+
+    [Fact]
+    public void HelloAck_LoginEphPub_RoundTrip_AndOldWireTolerance()
+    {
+        var msg = new HelloAck(1, 99UL, MsgType.Hello, "1.0.0", ProtocolVersion.Current,
+            new byte[16], HelloStatus.Ok, 777777UL, EcKeyPair.Generate().ExportPublicKey());
+        var decoded = PcpCodec.Decode<HelloAck>(PcpCodec.Encode(msg));
+        MsgAssert.Equal(msg, decoded);
+        Assert.Equal(65, decoded.LoginEphPub!.Length);
+
+        // 旧端 8 元素数组（M5 前无 loginEphPub）：尾部缺失容忍 → null
+        var wire = PcpCodec.Encode(msg with { LoginEphPub = null });
+        Assert.Equal(0x99, wire[0]); // fixarray(9)
+        var oldWire = wire[..^1];    // 去掉尾部 nil
+        oldWire[0] = 0x98;           // fixarray(8)
+        var old = PcpCodec.Decode<HelloAck>(oldWire);
+        Assert.Null(old.LoginEphPub);
+        Assert.Equal(HelloStatus.Ok, old.Status);
+    }
+
     [Fact]
     public void ProofHeartbeatError_RoundTrip_AllFieldsPreserved()
     {

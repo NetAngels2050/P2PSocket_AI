@@ -22,7 +22,9 @@ public sealed record Hello(
     [property: Key(4)] Guid? DeviceId,
     [property: Key(5)] byte[] NonceC) : IPcpMessage;
 
-/// <summary>0x01 S→C：serverTs 供 RTT/2 补偿计算 offset（OQ-12）。</summary>
+/// <summary>0x01 S→C：serverTs 供 RTT/2 补偿计算 offset（OQ-12）。
+/// loginEphPub（v1.67/M5，TD-25，SEC-26）：本连接登录加密临时 P-256 公钥（65B，连接关闭即弃）——
+/// 0x20/0x21/0x23 密码 ECIES 封装接收钥（07 §10.1）；缺失=旧服务端，客户端登录族本地拒绝不回退明文（OQ-21①）。</summary>
 [MessagePackObject]
 public sealed record HelloAck(
     [property: Key(0)] uint Seq,
@@ -32,7 +34,8 @@ public sealed record HelloAck(
     [property: Key(4)] ushort ProtocolVersion,
     [property: Key(5)] byte[] NonceS,
     [property: Key(6)] HelloStatus Status,
-    [property: Key(7)] ulong ServerTs) : IPcpMessage;
+    [property: Key(7)] ulong ServerTs,
+    [property: Key(8)] byte[]? LoginEphPub = null) : IPcpMessage;
 
 // ── 0x02 连接级身份证明（02 §2.3）─────────────────────────────────────
 

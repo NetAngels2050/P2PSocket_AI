@@ -1,4 +1,5 @@
 using System.IO.Pipelines;
+using System.Text;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.EntityFrameworkCore;
@@ -57,8 +58,12 @@ internal sealed class TestPcpClient : IAsyncDisposable
     {
         var key = keyOverride ?? ConnMacKey;
         var body = sign && key.Length > 0 ? PcpCodec.EncodeSigned(message, key) : PcpCodec.Encode(message);
+        SentWire.Add(body); // 帧转储（M5-06 A-16 探针：断言报文不含明文密码子串）
         await FrameCodec.WriteFrameAsync(_writer, body);
     }
+
+    /// <summary>已发帧转储（msgpack 本体，签名前后均为线上字节；A-16 明文探针用）。</summary>
+    public List<byte[]> SentWire { get; } = [];
 
     public async Task SendRawAsync(byte[] frameBody)
         => await FrameCodec.WriteFrameAsync(_writer, frameBody);
@@ -107,8 +112,16 @@ internal sealed class TestPcpClient : IAsyncDisposable
         await SendAsync(new Hello(NextSeq(), Now(), MsgType.Hello, version, deviceId, NonceC), sign: false);
         var ack = await ReceiveAsync<HelloAck>() ?? throw new IOException("连接在 HelloAck 前关闭");
         NonceS = ack.NonceS;
+        LoginEphPub = ack.LoginEphPub; // M5-06/SEC-26：登录族加密公钥（07 §10.2）
         return ack;
     }
+
+    /// <summary>本连接登录加密公钥（HelloAck 携带；旧服务端缺失）。</summary>
+    public byte[]? LoginEphPub { get; private set; }
+
+    /// <summary>登录族密码 ECIES 封装（M5-06：info="pcp-login-v1"，与生产客户端同口径）。</summary>
+    public byte[] BoxLoginSecret(string secret)
+        => Ecies.Encrypt(LoginEphPub!, Encoding.UTF8.GetBytes(secret), "pcp-login-v1"u8);
 
     public async Task<ProofAck> ProofAsync(byte[] deviceSecret, bool valid = true)
     {

@@ -136,8 +136,10 @@ public sealed class ClientRegistrationService(
     {
         if (client.Capability == CapabilityMode.Passive)
             await client.ReconnectAsync(ct);
+        // M5-06/SEC-26：密码现加密经 passwordBox（07 §10.2）；旧服务端无 loginEphPub 时
+        // BoxLoginSecret 本地拒绝——记住我重放沿「发送异常保留凭据」语义（下次重连再试）
         var ack = await client.SendRequestAsync<UserLoginAck>(seq => new UserLogin(
-            seq, client.TimestampMs(), MsgType.UserLogin, username, password), ct);
+            seq, client.TimestampMs(), MsgType.UserLogin, username, "", client.BoxLoginSecret(password)), ct);
         if (ack.Ok)
         {
             await RememberCredentialsAsync(username, password, ct);
@@ -163,10 +165,11 @@ public sealed class ClientRegistrationService(
         await store.SaveAsync(ct);
     }
 
-    /// <summary>向导第二步·新建账号（0x20）：成功后仍需 <see cref="LoginBindAsync"/> 登录。</summary>
+    /// <summary>向导第二步·新建账号（0x20）：成功后仍需 <see cref="LoginBindAsync"/> 登录。
+    /// M5-06/SEC-26：密码经 passwordBox 现加密（同 0x21 封装口径）。</summary>
     public Task<UserRegisterAck> CreateUserAsync(string username, string password, CancellationToken ct = default)
         => client.SendRequestAsync<UserRegisterAck>(seq => new UserRegister(
-            seq, client.TimestampMs(), MsgType.UserRegister, username, password), ct);
+            seq, client.TimestampMs(), MsgType.UserRegister, username, "", client.BoxLoginSecret(password)), ct);
 
     /// <summary>登录后新建分组（0x50，向导"注册账号建组"路径收尾）。</summary>
     public Task<GroupCreateAck> CreateGroupAsync(string name, JoinPolicy policy, CancellationToken ct = default)

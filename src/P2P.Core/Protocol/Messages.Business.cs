@@ -81,13 +81,16 @@ public sealed record RemoteCodeResetAck(
 
 // ── 0x20~0x23 用户族（FR-S-201~205）────────────────────────────────────
 
+/// <summary>0x20 C→S。v1.67/M5（SEC-26/07 §10.2）：密码经 PasswordBox（ECIES 密文，info="pcp-login-v1"）；
+/// PasswordBox 缺失或明文 Password 非空 → 5004（OQ-21① 硬切，无明文过渡双轨）。</summary>
 [MessagePackObject]
 public sealed record UserRegister(
     [property: Key(0)] uint Seq,
     [property: Key(1)] ulong TimestampMs,
     [property: Key(2)] byte MsgType,
     [property: Key(3)] string Username,
-    [property: Key(4)] string Password) : IPcpMessage;
+    [property: Key(4)] string Password,
+    [property: Key(5)] byte[]? PasswordBox = null) : IPcpMessage;
 
 [MessagePackObject]
 public sealed record UserRegisterAck(
@@ -96,13 +99,15 @@ public sealed record UserRegisterAck(
     [property: Key(2)] byte MsgType,
     [property: Key(3)] bool Ok) : IPcpMessage;
 
+/// <summary>0x21 C→S（同 0x20 封装口径，SEC-26/07 §10.2；记住我重放每次现加密非密文重放）。</summary>
 [MessagePackObject]
 public sealed record UserLogin(
     [property: Key(0)] uint Seq,
     [property: Key(1)] ulong TimestampMs,
     [property: Key(2)] byte MsgType,
     [property: Key(3)] string Username,
-    [property: Key(4)] string Password) : IPcpMessage;
+    [property: Key(4)] string Password,
+    [property: Key(5)] byte[]? PasswordBox = null) : IPcpMessage;
 
 /// <summary>能力模式（PRD 05 §3）：normal=主动+被动；passive=哑节点。</summary>
 public enum CapabilityMode : byte
@@ -134,14 +139,18 @@ public sealed record UserLogoutAck(
     [property: Key(2)] byte MsgType,
     [property: Key(3)] bool Ok) : IPcpMessage;
 
-/// <summary>0x23 C→S：用户修改自己密码（FR-S-205；主动类——passive 拒绝 2002）。</summary>
+/// <summary>0x23 C→S：用户修改自己密码（FR-S-205；主动类——passive 拒绝 2002）。
+/// v1.67/M5（SEC-26/07 §10.2）：old/new 密码经 OldPasswordBox/NewPasswordBox（ECIES 密文，
+/// info="pcp-login-v1"）；任一缺失或明文字段非空 → 5004（OQ-21① 硬切）。</summary>
 [MessagePackObject]
 public sealed record UserChangePassword(
     [property: Key(0)] uint Seq,
     [property: Key(1)] ulong TimestampMs,
     [property: Key(2)] byte MsgType,
     [property: Key(3)] string OldPassword,
-    [property: Key(4)] string NewPassword) : IPcpMessage;
+    [property: Key(4)] string NewPassword,
+    [property: Key(5)] byte[]? OldPasswordBox = null,
+    [property: Key(6)] byte[]? NewPasswordBox = null) : IPcpMessage;
 
 [MessagePackObject]
 public sealed record UserChangePasswordAck(

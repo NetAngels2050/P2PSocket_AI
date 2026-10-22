@@ -178,7 +178,7 @@ public sealed class MappingSyncIntegrationTests : IAsyncLifetime
             await stack.Control.WaitReadyAsync(cts.Token);
         var login = await stack.Control.SendRequestAsync<UserLoginAck>(new UserLogin(
             stack.Control.NextSeq(), stack.Control.TimestampMs(), MsgType.UserLogin,
-            DbInitializer.AdminUsername, DbInitializer.AdminUsername));
+            DbInitializer.AdminUsername, "", stack.Control.BoxLoginSecret(DbInitializer.AdminUsername)));
         Assert.True(login!.Ok); // L2：会话归属 admin 后可见同账号设备
 
         stack.Store = new StateStore(_stateDir);
