@@ -33,7 +33,8 @@ public sealed class ServerWebHostService(
     GroupService groups,
     RelayService? relay = null,
     StunService? stun = null,
-    RelayRateLimiter? limiter = null) : IHostedService
+    RelayRateLimiter? limiter = null,
+    LoginThrottle? loginThrottle = null) : IHostedService
 {
     private WebApplication? _app;
 
@@ -43,7 +44,7 @@ public sealed class ServerWebHostService(
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _app = Build(options, time, sessions, dbFactory, audit, admin, registry, groups, relay, stun,
-            limiter, WebRootOverride);
+            limiter, WebRootOverride, loginThrottle);
         await _app.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -57,7 +58,7 @@ public sealed class ServerWebHostService(
         AdminSessionStore sessions, IDbContextFactory<AppDbContext> dbFactory, AuditLogger audit,
         AdminService admin, DeviceRegistry registry, GroupService groups,
         RelayService? relay = null, StunService? stun = null, RelayRateLimiter? limiter = null,
-        string? webRootOverride = null)
+        string? webRootOverride = null, LoginThrottle? loginThrottle = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls($"http://{options.Listen.WebBind}:{options.Listen.Web}");
@@ -68,8 +69,9 @@ public sealed class ServerWebHostService(
         builder.Services.AddSingleton(sessions);
         var app = builder.Build();
 
-        // M3-02 管理员会话与账号（认证中间件白名单 /api/auth/login 的端点本体在此挂载）
-        new AdminAuthApi(dbFactory, audit).Map(app, sessions);
+        // M3-02 管理员会话与账号（认证中间件白名单 /api/auth/login 的端点本体在此挂载）；
+        // M5-04 起防爆破并入统一 LoginThrottle（与 0x21 同组件同 IP 键，07 §11.1）
+        new AdminAuthApi(dbFactory, audit, loginThrottle, time).Map(app, sessions);
         // M3-03 用户管理（进程内直调 AdminService：踢线/降级/0x75 即时生效）
         new AdminUsersApi(dbFactory, admin, audit).Map(app);
         // M3-04 设备管理（列表在线态取 registry；动作全转调 AdminService）
@@ -82,7 +84,7 @@ public sealed class ServerWebHostService(
         new AdminRelayApi(dbFactory, relay, limiter, audit).Map(app);
         // M3-08 映射数据（TD-22 投影共享核）/系统配置（白名单校验+限速键联动）/审计日志（分页过滤）
         new AdminMappingsApi(dbFactory).Map(app);
-        new AdminSystemApi(dbFactory, limiter, audit).Map(app);
+        new AdminSystemApi(dbFactory, limiter, audit, loginThrottle).Map(app);
         new AdminAuditLogsApi(dbFactory).Map(app);
 
         // 认证骨架（04 §3.1/§3.2、07 §8）：/api/* 须携带有效会话 Cookie，否则 401 {code:2001}；

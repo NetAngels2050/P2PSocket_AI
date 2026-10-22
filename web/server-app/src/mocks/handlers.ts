@@ -177,6 +177,8 @@ const CONFIG_DEFAULTS: Record<string, string> = {
   max_devices: "500",
   device_registration_open: "1", // M5-02/SEC-61：设备注册准入开关
   register_rate_per_ip: "10", // M5-02/SEC-61：单 IP 注册频控 次/h
+  login_fail_window_sec: "900", // M5-04/SEC-63：登录防爆破滑动窗（PUT 热更即时生效）
+  login_delay_cap_ms: "8000", // M5-04/SEC-63：登录延迟封顶 ms
   punch_retention_days: "90",
   stun_rate_per_ip: "50",
   stun_rate_per_device: "10",

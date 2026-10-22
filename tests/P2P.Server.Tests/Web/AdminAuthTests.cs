@@ -13,7 +13,7 @@ namespace P2P.Server.Tests.Web;
 /// <summary>
 /// M3-02 管理员会话与账号（FR-S-203、04 §3.1、07 §8、OQ-3）：
 /// admin/admin 首登 mustChangePassword / 改密后消失 / 错误密码 401+审计 / logout 失效 Cookie /
-/// 旧密码校验 / 会话 8h 过期（假时钟）/ 限速递增延迟后成功登录仍恢复。
+/// 旧密码校验 / 会话 8h 过期（假时钟）/ M5-04 限速双维递增（账户维成功复位、IP 维滑窗衰减）。
 /// </summary>
 public sealed class AdminAuthTests : IAsyncLifetime
 {
@@ -35,7 +35,8 @@ public sealed class AdminAuthTests : IAsyncLifetime
         var registry = new DeviceRegistry(); // 本任务无在线设备（纯账号链）
         _web = new ServerWebHostService(options, _time, new AdminSessionStore(_time), factory,
             new AuditLogger(factory, _time), new AdminService(factory, registry, new AuditLogger(factory)), registry,
-            new GroupService(factory, registry, new AuditLogger(factory)))
+            new GroupService(factory, registry, new AuditLogger(factory)),
+            loginThrottle: new LoginThrottle(time: _time)) // M5-04：防爆破与 0x21 同组件（07 §11）
         {
             WebRootOverride = Path.Combine(Path.GetTempPath(), $"p2p-no-webroot-{Guid.NewGuid():N}"),
         };
@@ -69,6 +70,19 @@ public sealed class AdminAuthTests : IAsyncLifetime
         await using var db = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlite(_db.DataSource).Options);
         return await db.AuditLogs.AsNoTracking().CountAsync(a => a.Event == @event);
+    }
+
+    /// <summary>阶梯延迟期间的登录（M5-04：FakeTimeProvider 50ms 步进推进放行——轮询防服务端
+    /// 未入延迟的竞态；推进即完成 Task.Delay(timeProvider) 等待）。</summary>
+    private async Task<JsonElement> LoginWithAdvanceAsync(HttpClient http, string username, string password)
+    {
+        var task = LoginAsync(http, username, password);
+        for (var i = 0; i < 400 && !task.IsCompleted; i++)
+        {
+            _time.Advance(TimeSpan.FromMilliseconds(50));
+            await Task.Delay(2);
+        }
+        return await task;
     }
 
     // ── FR-S-203 主链 ────────────────────────────────────────────────────
@@ -107,9 +121,9 @@ public sealed class AdminAuthTests : IAsyncLifetime
 
         Assert.False(resp.Headers.Contains("Set-Cookie")); // 失败不发会话
         Assert.Equal(1, await AuditCountAsync("admin_login_fail"));
-        // 非管理员用户名同拒（单管理员 D16）
-        Assert.Equal(HttpStatusCode.Unauthorized,
-            (await http.PostAsJsonAsync("/api/auth/login", new { username = "nobody", password = "x" })).StatusCode);
+        // 非管理员用户名同拒（单管理员 D16）——同 IP 第 2 次失败已上 500ms 档（M5-04），假时钟推进放行
+        var second = await LoginWithAdvanceAsync(http, "nobody", "x");
+        Assert.Equal(2001, second.GetProperty("code").GetInt32());
     }
 
     [Fact]
@@ -165,25 +179,30 @@ public sealed class AdminAuthTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task 限速递增延迟_成功登录即恢复()
+    public async Task 限速双维递增_账户维成功复位_IP维滑窗衰减()
     {
         using var http = CreateClient();
-        // 连续失败 2 次（各 0/500ms 阶梯）
-        await LoginAsync(http, "admin", "bad-1");
-        await LoginAsync(http, "admin", "bad-2");
+        // 第 1 次失败无延迟即时应答；第 2 次失败双维各上 500ms 档（假时钟推进放行）
+        var fail1 = await LoginAsync(http, "admin", "bad-1");
+        Assert.Equal(2001, fail1.GetProperty("code").GetInt32());
+        var fail2 = await LoginWithAdvanceAsync(http, "admin", "bad-2");
+        Assert.Equal(2001, fail2.GetProperty("code").GetInt32());
 
-        // 第 3 次正确口令：先吃 1s 递增延迟仍成功，且计数复位（第 4 次登录无延迟）
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var ok = await LoginAsync(http, "admin", "admin");
-        sw.Stop();
+        // 第 3 次正确口令：先吃 1000ms 当前档（A-15 延迟期间正确登录同受档）仍成功——账户维复位
+        var ok = await LoginWithAdvanceAsync(http, "admin", "admin");
         Assert.Equal(0, ok.GetProperty("code").GetInt32());
-        Assert.True(sw.Elapsed >= TimeSpan.FromSeconds(1), $"应吃 ≥1s 递增延迟，实耗 {sw.Elapsed}");
 
-        sw.Restart();
-        var ok2 = await LoginAsync(http, "admin", "admin");
-        sw.Stop();
+        // 第 4 次正确口令：IP 维仍有 2 次窗内计数（成功不清 IP 维，07 §11.1 防穿插复位）→ 仍吃 1000ms 档
+        var ok2 = await LoginWithAdvanceAsync(http, "admin", "admin");
         Assert.Equal(0, ok2.GetProperty("code").GetInt32());
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(1), $"成功后应复位无延迟，实耗 {sw.Elapsed}");
+
+        // 窗口自然衰减：推进 901s > 900s 窗 → 双维归零，登录无延迟即时完成（不推进即回=零感知）
+        _time.Advance(TimeSpan.FromSeconds(901));
+        var noDelay = await LoginAsync(http, "admin", "admin");
+        Assert.Equal(0, noDelay.GetProperty("code").GetInt32());
+
         Assert.Equal(2, await AuditCountAsync("admin_login_fail")); // 仅两次失败
+        // 阶跃审计（07 §11.3）：account/ip 两维各在 fails=1,2 跨档 → 各 2 条共 4 条
+        Assert.Equal(4, await AuditCountAsync("login_throttled"));
     }
 }

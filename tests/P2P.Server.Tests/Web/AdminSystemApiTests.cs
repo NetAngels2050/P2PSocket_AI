@@ -22,6 +22,7 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
     private ServerWebHostService _web = null!;
     private HttpClient _http = null!;
     private RelayRateLimiter _limiter = null!;
+    private LoginThrottle _throttle = null!;
     private IDbContextFactory<AppDbContext> _factory = null!;
 
     public async Task InitializeAsync()
@@ -38,8 +39,10 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
         var admin = new AdminService(_factory, _registry, audit, invalidation, listPusher: pusher);
 
         var options = new ServerOptions { Listen = { Web = Random.Shared.Next(21000, 24000) } };
+        _throttle = new LoginThrottle(); // M5-04：PUT 热更联动件（System 时钟——本夹具无假时钟推进需求）
         _web = new ServerWebHostService(options, TimeProvider.System, new AdminSessionStore(TimeProvider.System),
-            _factory, audit, admin, _registry, groupService, null, null, _limiter)
+            _factory, audit, admin, _registry, groupService, null, null, _limiter,
+            loginThrottle: _throttle)
         {
             WebRootOverride = Path.Combine(Path.GetTempPath(), $"p2p-no-webroot-{Guid.NewGuid():N}"),
         };
@@ -95,6 +98,10 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
         Assert.Equal("1", byKey["device_registration_open"].GetProperty("value").GetString()); // M5-02 种子：默认开放
         Assert.False(byKey["device_registration_open"].GetProperty("restartRequired").GetBoolean()); // 注册路径现读
         Assert.True(byKey["register_rate_per_ip"].GetProperty("restartRequired").GetBoolean()); // 启动期入令牌桶
+        Assert.Equal("900", byKey["login_fail_window_sec"].GetProperty("value").GetString()); // M5-04 种子
+        Assert.Equal("8000", byKey["login_delay_cap_ms"].GetProperty("value").GetString());
+        Assert.False(byKey["login_fail_window_sec"].GetProperty("restartRequired").GetBoolean()); // PUT 热更联动
+        Assert.False(byKey["login_delay_cap_ms"].GetProperty("restartRequired").GetBoolean());
     }
 
     [Fact]
@@ -126,6 +133,31 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PUT_登录防爆破键_热更LoginThrottle即时生效()
+    {
+        // 预置两失败（1000ms 档）→ PUT 收帽 500 → 现值档立即被钳制（运行期热更，07 §11）
+        _throttle.RecordFailure(LoginThrottle.DimAccount, "probe-user");
+        _throttle.RecordFailure(LoginThrottle.DimAccount, "probe-user");
+        Assert.Equal(1000, _throttle.LoginDelayMs("probe-user", null));
+
+        var (status, body) = await PutAsync(new Dictionary<string, string>
+        {
+            ["login_delay_cap_ms"] = "500",
+        });
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(500, _throttle.LoginDelayMs("probe-user", null));
+
+        // 持久化 + 变更入审计（单键 PUT 亦按对热更——另一键取库内现值）
+        await using (var db = CreateDb())
+        {
+            Assert.Equal("500", (await db.ServerConfig.AsNoTracking()
+                .SingleAsync(c => c.Key == "login_delay_cap_ms")).Value);
+            Assert.Contains(await db.AuditLogs.AsNoTracking().ToListAsync(),
+                l => l.Event == "system_config_change" && l.Detail!.Contains("login_delay_cap_ms"));
+        }
+    }
+
+    [Fact]
     public async Task PUT_非法值_400矩阵()
     {
         var cases = new Dictionary<string, string>
@@ -138,6 +170,8 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
             ["relay_enabled"] = "2",                       // 非 0|1
             ["device_registration_open"] = "on",           // M5-02 非 0|1
             ["register_rate_per_ip"] = "0",                // M5-02 频控下界
+            ["login_fail_window_sec"] = "30",              // M5-04 滑动窗下界（60s）
+            ["login_delay_cap_ms"] = "70000",              // M5-04 延迟帽上界（60s）
             ["default_join_policy"] = "open",              // 域外
             ["relay_rate_limit"] = "99999999999",          // 超 int
             ["update_url"] = "ftp://x",                    // 非 http(s)

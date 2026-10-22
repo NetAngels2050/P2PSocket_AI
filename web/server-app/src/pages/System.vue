@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// M3-11 系统配置与审计页（06 §3、FR-S-825、NFR-54）：server_config 白名单 21 键键值编辑表格
+// M3-11 系统配置与审计页（06 §3、FR-S-825、NFR-54）：server_config 白名单 23 键键值编辑表格
 // （按类型控件：开关 bool/枚举 select/数值 input-number/文本——行级保存 PUT 单键，服务端
 // 全量校验整单拒绝 400{1001} 前端显示错误）+重启生效提示 tag+审计日志（event 过滤+分页
 // newest-first，detail 原始 JSON 文本截断透传）。
@@ -28,6 +28,8 @@ const KEY_META: Record<string, { label: string; type: "bool" | "select" | "numbe
   max_devices: { label: "设备上限", type: "number" },
   device_registration_open: { label: "设备注册准入", type: "bool" }, // M5-02/SEC-61（即时生效）
   register_rate_per_ip: { label: "注册频控（次/h/IP）", type: "number" }, // M5-02（重启生效）
+  login_fail_window_sec: { label: "登录失败滑动窗（秒）", type: "number" }, // M5-04/SEC-63（即时生效）
+  login_delay_cap_ms: { label: "登录延迟封顶（ms）", type: "number" }, // M5-04/SEC-63（即时生效）
   stun_rate_per_ip: { label: "STUN 每 IP（pps）", type: "number" },
   stun_rate_per_device: { label: "STUN 每设备（QPS）", type: "number" },
   stun_circuit_pps: { label: "STUN 断路阈值（pps）", type: "number" },

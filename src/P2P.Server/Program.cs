@@ -113,6 +113,18 @@ builder.Services.AddSingleton(sp =>
     });
 });
 builder.Services.AddSingleton<RegistrationService>();
+// M5-04 登录防爆破（SEC-63、07 §11）：四入口共用单例（0x21/0x23 经 UserService、admin 经
+// AdminAuthApi 同 IP 键共享）；两键启动期读入初值，AdminSystemApi PUT 热更 Update 即时生效
+builder.Services.AddSingleton(sp =>
+{
+    using var db = sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext();
+    var cfg = new ServerConfigStore(db);
+    return new LoginThrottle(new LoginThrottleOptions
+    {
+        WindowSec = cfg.GetInt("login_fail_window_sec"),
+        DelayCapMs = cfg.GetInt("login_delay_cap_ms"),
+    }, sp.GetRequiredService<TimeProvider>());
+});
 builder.Services.AddSingleton<UserService>();
 // 0x41 列表变更推送（M2-10，FR-S-403）：订阅 DeviceRegistry 在线事件 + GroupService 成员变更触发
 builder.Services.AddSingleton<DeviceListPusher>();

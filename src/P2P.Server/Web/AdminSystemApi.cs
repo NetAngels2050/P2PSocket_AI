@@ -13,11 +13,14 @@ using P2P.Server.Services;
 
 namespace P2P.Server.Web;
 
-/// <summary>系统配置端点组（挂 ServerWebHost 装配的 WebApplication，认证中间件之后）。</summary>
+/// <summary>系统配置端点组（挂 ServerWebHost 装配的 WebApplication，认证中间件之后）。
+/// M5-04 起 login_fail_window_sec/login_delay_cap_ms 运行期热更：PUT 后进程内直调
+/// LoginThrottle.Update 即时生效（RelayRateLimiter.UpdateRate 同款双写路径，07 §11/04 §3）。</summary>
 public sealed class AdminSystemApi(
     IDbContextFactory<AppDbContext> dbFactory,
     RelayRateLimiter? limiter,
-    AuditLogger audit)
+    AuditLogger audit,
+    LoginThrottle? loginThrottle = null)
 {
     /// <summary>键→（校验器， 错误提示）。白名单即此表键集（=ConfigDefaults 全集，03 §2.8）。</summary>
     private static readonly Dictionary<string, (Func<string, bool> Valid, string Reason)> Validators = new()
@@ -38,6 +41,10 @@ public sealed class AdminSystemApi(
         ["device_registration_open"] = (v => v is "0" or "1", "须为 0|1"),
         ["register_rate_per_ip"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000,
             "须为 1~1000000（次/小时/IP）"),
+        ["login_fail_window_sec"] = (v => int.TryParse(v, out var n) && n is >= 60 and <= 86400,
+            "须为 60~86400（秒）"),
+        ["login_delay_cap_ms"] = (v => int.TryParse(v, out var n) && n is >= 0 and <= 60000,
+            "须为 0~60000（毫秒，0=不延迟）"),
         ["punch_retention_days"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 3650, "须为 1~3650（天）"),
         ["stun_rate_per_ip"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000, "须为 1~1000000（pps）"),
         ["stun_rate_per_device"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 100000, "须为 1~100000（QPS）"),
@@ -103,6 +110,15 @@ public sealed class AdminSystemApi(
             if (body.TryGetValue("relay_rate_limit", out var rate)
                 && long.TryParse(rate, out var bytesPerSec))
                 limiter?.UpdateRate(bytesPerSec); // M3-07 同执行链：限速键即时驱动进程桶
+
+            // M5-04/SEC-63：登录防爆破两键任一出现即以库内现值热更 LoginThrottle（两键联动读取，
+            // 另一键 ConfigDefaults 幂等种子必在库——PUT 单键也按对更新）
+            if (loginThrottle is not null
+                && (body.ContainsKey("login_fail_window_sec") || body.ContainsKey("login_delay_cap_ms")))
+            {
+                var cfg = new ServerConfigStore(db);
+                loginThrottle.Update(cfg.GetInt("login_fail_window_sec"), cfg.GetInt("login_delay_cap_ms"));
+            }
 
             await audit.WriteAsync("system_config_change", detail: new
             {

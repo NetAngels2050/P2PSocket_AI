@@ -28,6 +28,8 @@ public static class DbInitializer
         ("max_devices", "500"),
         ("device_registration_open", "1"), // M5-02/SEC-61：设备注册准入开关（默认开放 OQ-20③；注册路径现读）
         ("register_rate_per_ip", "10"),    // M5-02/SEC-61：单 IP 注册频控 次/h（启动期读入 RegistrationGuard）
+        ("login_fail_window_sec", "900"),  // M5-04/SEC-63：登录防爆破滑动窗（PUT 热更联动 LoginThrottle）
+        ("login_delay_cap_ms", "8000"),    // M5-04/SEC-63：递增延迟封顶 ms（同上）
         ("punch_retention_days", "90"),
         ("stun_rate_per_ip", "50"),
         ("stun_rate_per_device", "10"),

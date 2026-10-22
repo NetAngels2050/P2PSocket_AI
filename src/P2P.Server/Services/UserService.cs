@@ -12,13 +12,18 @@ namespace P2P.Server.Services;
 /// 改密（M2-27）：旧密码校验 → 覆写 hash（不裁会话——能力模式不变，05 §3）。
 /// 改名（v1.58，FR-S-107）：trim 后 1~64（与客户端 04 §2.1 口径一致，防协议直连绕过）→
 /// 改库 + 审计 device_rename + 0x41 推送（Ack 先于推送，M2-10 纪律）。
+/// M5-04 登录防爆破（SEC-63、07 §11）：0x21/0x23 凭据失败计入 LoginThrottle 双维
+/// （account=username+IP 四入口共享），延迟先于凭据校验（正确登录同吃当前档，A-15）、
+/// 限流触发=延迟后正常失败应答不设专用错误码（零信息泄漏）；成功复位仅账户维（IP 维滑窗自然衰减）；
+/// 阶跃审计 login_throttled（≤每窗 5 条/键）。throttle 可空注入——未装配跳过（测试夹具）。
 /// </summary>
 public sealed class UserService(
     IDbContextFactory<AppDbContext> dbFactory,
     AuditLogger audit,
     TimeProvider? time = null,
     InvalidationPusher? invalidation = null,
-    DeviceListPusher? listPusher = null)
+    DeviceListPusher? listPusher = null,
+    LoginThrottle? throttle = null)
 {
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
@@ -58,10 +63,14 @@ public sealed class UserService(
             MsgType.UserRegister, true));
     }
 
-    /// <summary>0x21 登录：凭据校验 → 设备 owner 绑定 + 能力切 normal + token（FR-S-106）。</summary>
+    /// <summary>0x21 登录：凭据校验 → 设备 owner 绑定 + 能力切 normal + token（FR-S-106）。
+    /// 防爆破（M5-04/07 §11）：双维延迟先于校验；失败计双维+阶跃审计；成功复位仅账户维。</summary>
     public async Task HandleLoginAsync(ControlSession session, UserLogin msg)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
+        var ip = session.RemoteEndPoint?.Address.ToString();
+        await WaitThrottleAsync(throttle?.LoginDelayMs(msg.Username, ip)); // 先于凭据校验（A-15 含正确登录）
+
         var user = await db.Users.AsNoTracking()
             .SingleOrDefaultAsync(u => u.Username == msg.Username);
         var ok = user is not null && !user.Disabled
@@ -69,11 +78,17 @@ public sealed class UserService(
         if (!ok)
         {
             await audit.WriteAsync("login_failed", session.DeviceId, detail: new { msg.Username });
+            if (throttle is not null)
+            {
+                await RecordThrottleFailAsync(session.DeviceId, LoginThrottle.DimAccount, msg.Username);
+                if (ip is not null) await RecordThrottleFailAsync(session.DeviceId, LoginThrottle.DimIp, ip);
+            }
             await session.SendAsync(new UserLoginAck(session.NextSeq(), session.ServerTimestamp(),
                 MsgType.UserLogin, false, CapabilityMode.Passive, ""));
             return;
         }
 
+        throttle?.Reset(LoginThrottle.DimAccount, msg.Username); // 账户维成功复位（IP 维不清零，07 §11.1）
         await db.Devices.Where(d => d.Id == session.DeviceId)
             .ExecuteUpdateAsync(s => s.SetProperty(x => x.OwnerUserId, user!.Id));
         session.Capability = CapabilityMode.Normal;
@@ -98,7 +113,8 @@ public sealed class UserService(
     }
 
     /// <summary>0x23 修改自己密码（M2-27，FR-S-205；主动类——passive 拒 2002）：
-    /// 旧密码校验失败/未登录 → Ack Ok=false（不泄漏具体原因）；成功覆写 hash 并审计。</summary>
+    /// 旧密码校验失败/未登录 → Ack Ok=false（不泄漏具体原因）；成功覆写 hash 并审计。
+    /// 防爆破（M5-04/07 §11）：与 0x21 同双维同键——账户维共享使改密失败同样抬高登录延迟（反之亦然）。</summary>
     public async Task HandleChangePasswordAsync(ControlSession session, UserChangePassword msg)
     {
         if (session.OwnerUserId is not { } userId)
@@ -108,22 +124,48 @@ public sealed class UserService(
         }
         await using var db = await dbFactory.CreateDbContextAsync();
         var user = await db.Users.SingleOrDefaultAsync(u => u.Id == userId);
+        var ip = session.RemoteEndPoint?.Address.ToString();
+        await WaitThrottleAsync(throttle?.LoginDelayMs(user?.Username, ip)); // 先于凭据校验
         if (user is null || user.Disabled
             || string.IsNullOrEmpty(msg.OldPassword)
             || msg.NewPassword.Length < 6
             || !PasswordHasher.Verify(msg.OldPassword, user.PasswordHash))
         {
             await audit.WriteAsync("password_change_failed", session.DeviceId, userId: userId);
+            if (throttle is not null && user is not null)
+            {
+                await RecordThrottleFailAsync(session.DeviceId, LoginThrottle.DimAccount, user.Username);
+                if (ip is not null) await RecordThrottleFailAsync(session.DeviceId, LoginThrottle.DimIp, ip);
+            }
             await session.SendAsync(new UserChangePasswordAck(session.NextSeq(), session.ServerTimestamp(),
                 MsgType.UserChangePassword, false));
             return;
         }
+        throttle?.Reset(LoginThrottle.DimAccount, user.Username); // 凭据成功同复位（仅账户维）
         user.PasswordHash = PasswordHasher.Hash(msg.NewPassword);
         user.UpdatedAt = _time.GetLocalNow().UtcDateTime;
         await db.SaveChangesAsync();
         await audit.WriteAsync("password_change", session.DeviceId, userId: userId);
         await session.SendAsync(new UserChangePasswordAck(session.NextSeq(), session.ServerTimestamp(),
             MsgType.UserChangePassword, true));
+    }
+
+    /// <summary>阶梯延迟（TimeProvider 版 Task.Delay——FakeTimeProvider 夹具推进假时钟即放行）。</summary>
+    private async Task WaitThrottleAsync(int? delayMs)
+    {
+        if (delayMs is > 0)
+            await Task.Delay(TimeSpan.FromMilliseconds(delayMs.Value), _time);
+    }
+
+    /// <summary>记一维失败+阶跃审计（07 §11.3：延迟值跨档才记——每窗 ≤5 条/键；detail=维名+键值+fails+delayMs）。</summary>
+    private async Task RecordThrottleFailAsync(Guid? deviceId, string dim, string key)
+    {
+        var r = throttle!.RecordFailure(dim, key);
+        if (!r.SteppedUp) return;
+        object detail = dim == LoginThrottle.DimAccount
+            ? new { dim, account = key, fails = r.Fails, delayMs = r.DelayMs }
+            : new { dim, ip = key, fails = r.Fails, delayMs = r.DelayMs };
+        await audit.WriteAsync("login_throttled", deviceId, detail: detail);
     }
 
     /// <summary>0x13 设备改名（本机管理类，passive 允许——02 §2.5 矩阵；FR-S-107）：
