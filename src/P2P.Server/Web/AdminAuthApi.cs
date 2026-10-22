@@ -6,6 +6,7 @@
 // admin 单账户=账户维退化常量（真实账户名，防伪造用户名分片计数）+IP 维与 0x21 共享同键
 // （任一入口失败抬高该 IP 全部入口延迟）；封顶随 login_delay_cap_ms 不再各持一套；
 // 成功复位仅账户维（原 per-IP 成功复位语义退役——IP 维滑窗自然衰减，07 §11.1）。
+// M5-05 change-password 端点同款接入（错旧密码双维计数、成功复位账户维）——SEC-63 四入口收口。
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
@@ -90,14 +91,27 @@ public sealed class AdminAuthApi(
                 return;
             }
 
+            // M5-05 与 login 同款阶梯（SEC-63、07 §11.1）：改密口令校验同样先吃延迟——
+            // 错旧密码双维计数，成功仅复位账户维（关闭改密第二爆破入口）
+            var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            await WaitThrottleAsync(throttle?.LoginDelayMs(DbInitializer.AdminUsername, ip), ctx.RequestAborted);
+
             await using var db = await dbFactory.CreateDbContextAsync(ctx.RequestAborted);
             var admin = await db.Users.SingleOrDefaultAsync(
                 u => u.Username == DbInitializer.AdminUsername && u.IsAdmin, ctx.RequestAborted);
             if (admin is null || !PasswordHasher.Verify(req.OldPassword, admin.PasswordHash))
             {
+                if (throttle is not null)
+                {
+                    await RecordThrottleFailAsync(admin?.Id, LoginThrottle.DimAccount,
+                        DbInitializer.AdminUsername, ctx.RequestAborted);
+                    await RecordThrottleFailAsync(admin?.Id, LoginThrottle.DimIp, ip, ctx.RequestAborted);
+                }
                 await WriteAsync(ctx, StatusCodes.Status401Unauthorized, 2001, "当前密码不正确");
                 return;
             }
+
+            throttle?.Reset(LoginThrottle.DimAccount, DbInitializer.AdminUsername); // 账户维成功复位（IP 维不清零）
 
             admin.PasswordHash = PasswordHasher.Hash(req.NewPassword);
             admin.UpdatedAt = DateTime.UtcNow;

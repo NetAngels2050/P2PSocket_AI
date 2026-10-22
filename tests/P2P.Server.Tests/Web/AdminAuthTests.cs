@@ -72,11 +72,11 @@ public sealed class AdminAuthTests : IAsyncLifetime
         return await db.AuditLogs.AsNoTracking().CountAsync(a => a.Event == @event);
     }
 
-    /// <summary>阶梯延迟期间的登录（M5-04：FakeTimeProvider 50ms 步进推进放行——轮询防服务端
+    /// <summary>阶梯延迟期间的调用（M5-04：FakeTimeProvider 50ms 步进推进放行——轮询防服务端
     /// 未入延迟的竞态；推进即完成 Task.Delay(timeProvider) 等待）。</summary>
-    private async Task<JsonElement> LoginWithAdvanceAsync(HttpClient http, string username, string password)
+    private async Task<T> AdvanceUntilDoneAsync<T>(Func<Task<T>> call)
     {
-        var task = LoginAsync(http, username, password);
+        var task = call();
         for (var i = 0; i < 400 && !task.IsCompleted; i++)
         {
             _time.Advance(TimeSpan.FromMilliseconds(50));
@@ -84,6 +84,17 @@ public sealed class AdminAuthTests : IAsyncLifetime
         }
         return await task;
     }
+
+    private Task<JsonElement> LoginWithAdvanceAsync(HttpClient http, string username, string password)
+        => AdvanceUntilDoneAsync(() => LoginAsync(http, username, password));
+
+    /// <summary>改密请求（M5-05 起校验前吃阶梯延迟——统一经假时钟推进放行后取 body）。</summary>
+    private Task<JsonElement> ChangePasswordAsync(HttpClient http, string oldPassword, string newPassword)
+        => AdvanceUntilDoneAsync(async () =>
+        {
+            var resp = await http.PostAsJsonAsync("/api/auth/change-password", new { oldPassword, newPassword });
+            return JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStreamAsync());
+        });
 
     // ── FR-S-203 主链 ────────────────────────────────────────────────────
 
@@ -138,22 +149,41 @@ public sealed class AdminAuthTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Unauthorized,
             (await bare.PostAsJsonAsync("/api/auth/change-password", new { oldPassword = "admin", newPassword = "abcdef" })).StatusCode);
 
-        // 旧密码错 → 401；新密码 <6 → 400
+        // 旧密码错 → 401（首败零延迟即时）；新密码 <6 → 400（参数校验先于延迟）
         Assert.Equal(HttpStatusCode.Unauthorized,
             (await http.PostAsJsonAsync("/api/auth/change-password", new { oldPassword = "bad", newPassword = "abcdef" })).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest,
             (await http.PostAsJsonAsync("/api/auth/change-password", new { oldPassword = "admin", newPassword = "123" })).StatusCode);
 
-        // 成功改密 → 审计；mustChangePassword 消失（重新登录 false）；旧口令 401、新口令可登
-        Assert.Equal(HttpStatusCode.OK,
-            (await http.PostAsJsonAsync("/api/auth/change-password", new { oldPassword = "admin", newPassword = "newpass6" })).StatusCode);
+        // 成功改密（M5-05 后 IP 维 1 败吃 500ms 档——推进放行）→ 审计；mustChangePassword 消失、旧口令失效
+        Assert.Equal(0, (await ChangePasswordAsync(http, "admin", "newpass6")).GetProperty("code").GetInt32());
         Assert.Equal(1, await AuditCountAsync("admin_change_password"));
 
         using var re = CreateClient();
-        var again = await LoginAsync(re, "admin", "newpass6");
+        var again = await LoginWithAdvanceAsync(re, "admin", "newpass6"); // IP 维不清零仍吃档
         Assert.False(Data(again).GetProperty("mustChangePassword").GetBoolean());
-        Assert.Equal(HttpStatusCode.Unauthorized,
-            (await re.PostAsJsonAsync("/api/auth/login", new { username = "admin", password = "admin" })).StatusCode);
+        Assert.Equal(2001, (await LoginWithAdvanceAsync(re, "admin", "admin")).GetProperty("code").GetInt32());
+    }
+
+    [Fact]
+    public async Task 改密防爆破_错旧密码延迟递增_成功复位账户维()
+    {
+        using var http = CreateClient();
+        Assert.Equal(0, (await LoginAsync(http, "admin", "admin")).GetProperty("code").GetInt32());
+
+        // 首败零延迟即时 401；第 2 次错旧密码吃 500ms 档（双维各 1 败）
+        Assert.Equal(2001, (await ChangePasswordAsync(http, "bad-1", "abcdef9")).GetProperty("code").GetInt32());
+        Assert.Equal(2001, (await ChangePasswordAsync(http, "bad-2", "abcdef9")).GetProperty("code").GetInt32());
+
+        // 第 3 次正确旧密码：吃 1000ms 档仍成功——账户维复位（IP 维不清零）
+        Assert.Equal(0, (await ChangePasswordAsync(http, "admin", "newpass7")).GetProperty("code").GetInt32());
+
+        // 新口令下再改：账户维已清零、IP 维 2 败仍在 → 仍吃 1000ms 档后成功
+        Assert.Equal(0, (await ChangePasswordAsync(http, "newpass7", "newpass8")).GetProperty("code").GetInt32());
+
+        // 阶跃审计：acct/ip 两维各 fails=1,2 → 4 条（与 login 同键共享）；改密成功审计 2 次
+        Assert.Equal(4, await AuditCountAsync("login_throttled"));
+        Assert.Equal(2, await AuditCountAsync("admin_change_password"));
     }
 
     [Fact]
