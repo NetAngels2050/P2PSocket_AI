@@ -19,6 +19,8 @@ namespace P2P.Server.Tests;
 /// 空闲 90s 回收、TCP 断连即收会话并关对端、0x74 三错误路径（5002/1001/4005）、Grant 双侧下发。
 /// M3-07 追加（TD-23）：限速令牌桶欠账 → 新分配 5002 + invite relayAllowed 三态合成 +
 /// 存量会话欠账等待仅降速不中断（假时钟推进回填）+ 开关关闭存量不受杀。
+/// M5-10 追加（SEC-64）：JOIN 单 IP 到达速率闸（relay_join_rate_per_ip 现读——
+/// UDP 到达/TCP 首帧同源同桶、数据帧不扣、超限静默+Dropped 计数、热改收紧即时生效）。
 /// 夹具 RelayService 挂 PublicHost=203.0.113.99（M2-36）：Grant 端点断言覆盖通告地址语义；
 /// 默认本地侧派生路径由集成 harness（默认 options）端到端覆盖。
 /// </summary>
@@ -590,5 +592,135 @@ public sealed class RelayServiceTests : IAsyncLifetime
         await bUdp.SendAsync(BuildData(sid, back), _relayUdp);
         Assert.Equal(back, await ReceiveUdpAsync(aUdp));
         Assert.Equal(1, _relay.Stats.Sessions);
+    }
+
+    // ── M5-10/SEC-64 JOIN 速率闸（07 §12 relay_join_rate_per_ip——UDP 到达/TCP 首帧同源同桶，
+    // 数据帧与 KEEPALIVE 不扣；运行期现读热改即时生效。真实 sid=ack 观测，未知 sid=Dropped 观测——
+    // 闸在表查找前，两种路径都过闸但仅前者有应答）──────────────────────────
+
+    private void SetJoinRate(string rate)
+    {
+        using var db = CreateDb();
+        db.ServerConfig.Single(c => c.Key == "relay_join_rate_per_ip").Value = rate;
+        db.SaveChanges();
+    }
+
+    private async Task<UdpClient> BoundUdpAsync()
+    {
+        var udp = new UdpClient(AddressFamily.InterNetwork); // 显式 IPv4（M2-06 教训）
+        _udps.Add(udp);
+        udp.Client.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        return udp;
+    }
+
+    /// <summary>等待 Dropped 计数到位（收包循环处理可滞后于客户端断言窗——并行负载竞态）。</summary>
+    private async Task WaitDroppedAsync(long expected)
+    {
+        for (var i = 0; i < 50 && _relay.JoinGuard.Dropped != expected; i++)
+            await Task.Delay(100);
+        Assert.Equal(expected, _relay.JoinGuard.Dropped);
+    }
+
+    [Fact]
+    public async Task Relay_JoinRate_同IP超限静默_回填后再入()
+    {
+        SetJoinRate("1");
+        var (a, _) = await RegisterAsync("rate-a");
+        var (b, bId) = await RegisterAsync("rate-b");
+        var punchId = await CompletePunchAsync(a, b, bId);
+        var (ga, _) = await AllocateAsync(a, b, punchId);
+        var sid = ga.RelaySessionId;
+
+        var aUdp = await JoinUdpAsync(sid); // 首次扣桶 → ack（A 槽）
+        var flood = await BoundUdpAsync(); // 同 IP 第二个源（回环同址不同端口——键=IP）
+        await flood.SendAsync(BuildJoin(sid), _relayUdp);
+        await AssertUdpSilentAsync(flood); // 1s 内第二发：闸静默（无 ack）
+        await WaitDroppedAsync(1);
+
+        _time.Advance(TimeSpan.FromSeconds(1.1)); // 容量=速率=1：回填 1 枚
+        var bUdp = await JoinUdpAsync(sid); // 再入 → B 槽认领 ack
+        Assert.Equal(1, _relay.JoinGuard.Dropped); // 通过不计数
+    }
+
+    [Fact]
+    public async Task Relay_JoinRate_数据帧不扣桶()
+    {
+        SetJoinRate("2");
+        var unknown = 0xDEADBEEFul;
+        for (var i = 0; i < 2; i++) // 两枚令牌耗尽（未知 sid：过闸后表查找静默——Dropped 不动）
+        {
+            var udp = await BoundUdpAsync();
+            await udp.SendAsync(BuildJoin(unknown), _relayUdp);
+            await AssertUdpSilentAsync(udp);
+        }
+        Assert.Equal(0, _relay.JoinGuard.Dropped);
+
+        for (var i = 0; i < 5; i++) // 数据帧洪泛：不扣桶（07 §12 只闸会话建立面）
+        {
+            var udp = await BoundUdpAsync();
+            await udp.SendAsync(BuildData(unknown, PtpCiphertext(64)), _relayUdp);
+        }
+        await Task.Delay(100); // 收包循环处理窗
+        Assert.Equal(0, _relay.JoinGuard.Dropped);
+
+        var more = await BoundUdpAsync(); // 第三发 JOIN：桶已空 → 闸拒（数据帧未占额度）
+        await more.SendAsync(BuildJoin(unknown), _relayUdp);
+        await AssertUdpSilentAsync(more);
+        await WaitDroppedAsync(1);
+
+        _time.Advance(TimeSpan.FromSeconds(1.1)); // 回填后通过（Dropped 不增）
+        var refill = await BoundUdpAsync();
+        await refill.SendAsync(BuildJoin(unknown), _relayUdp);
+        await Task.Delay(100);
+        Assert.Equal(1, _relay.JoinGuard.Dropped);
+    }
+
+    [Fact]
+    public async Task Relay_JoinRate_TCP首帧同桶_超限静默关()
+    {
+        SetJoinRate("1");
+        var (a, _) = await RegisterAsync("trate-a");
+        var (b, bId) = await RegisterAsync("trate-b");
+        var punchId = await CompletePunchAsync(a, b, bId);
+        var (ga, _) = await AllocateAsync(a, b, punchId);
+        var sid = ga.RelaySessionId;
+
+        var aTcp = await JoinTcpAsync(sid); // 首帧 JOIN 扣桶 → ack（A 槽）
+
+        var gate = new TcpClient(AddressFamily.InterNetwork); // 同 IP 第二连接：首帧即闸
+        _tcps.Add(gate);
+        await gate.ConnectAsync(_relayTcp);
+        await WriteTcpFrameAsync(gate.GetStream(), BuildJoin(sid));
+        var n = await gate.GetStream().ReadAsync(new byte[1]); // 超限静默关 → EOF
+        Assert.Equal(0, n);
+        Assert.Equal(1, _relay.JoinGuard.Dropped);
+
+        _time.Advance(TimeSpan.FromSeconds(1.1)); // aTcp 保持连接（A 端断开即会话回收——02 §6.2）
+        var bTcp = await JoinTcpAsync(sid); // 回填后再入 → B 槽 ack
+        Assert.Equal(1, _relay.JoinGuard.Dropped);
+    }
+
+    [Fact]
+    public async Task Relay_JoinRate_热改收紧即时生效()
+    {
+        var unknown = 0xFEEDFACEul;
+        for (var i = 0; i < 3; i++) // 缺省 30/s：三发通过
+        {
+            var udp = await BoundUdpAsync();
+            await udp.SendAsync(BuildJoin(unknown), _relayUdp);
+        }
+        await Task.Delay(100);
+        Assert.Equal(0, _relay.JoinGuard.Dropped);
+
+        SetJoinRate("1"); // 热改收紧（JOIN 现读——容量随调用钳制到新值）
+        var fourth = await BoundUdpAsync();
+        await fourth.SendAsync(BuildJoin(unknown), _relayUdp);
+        await Task.Delay(100);
+        Assert.Equal(0, _relay.JoinGuard.Dropped); // 钳制后余 1 枚可过
+
+        var fifth = await BoundUdpAsync();
+        await fifth.SendAsync(BuildJoin(unknown), _relayUdp);
+        await AssertUdpSilentAsync(fifth);
+        await WaitDroppedAsync(1); // 新值下第二发即拒
     }
 }

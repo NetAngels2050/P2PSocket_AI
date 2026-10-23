@@ -76,6 +76,7 @@ public sealed class RelayService : IAsyncDisposable
 
     private readonly RelayRateLimiter? _rateLimiter; // TD-23 全局字节率令牌桶（M3-07；null=不限）
     private readonly BlacklistStore? _blacklist; // M5-08：UDP 到达/TCP accept 闸（07 §13.3）
+    private readonly RelayJoinGuard _joinGuard; // M5-10：JOIN 单 IP 到达速率闸（07 §12——与注入 time 同源）
 
     public RelayService(IDbContextFactory<AppDbContext> dbFactory, DeviceRegistry registry,
         Func<Guid, (Guid InitiatorId, Guid TargetId)?>? peerResolver = null,
@@ -89,12 +90,16 @@ public sealed class RelayService : IAsyncDisposable
         _time = time ?? TimeProvider.System;
         _rateLimiter = rateLimiter;
         _blacklist = blacklist;
+        _joinGuard = new RelayJoinGuard(_time);
         _startedUtc = _time.GetLocalNow().UtcDateTime;
         _reaper = ReaperAsync(_cts.Token);
     }
 
     /// <summary>UDP 实际绑定端点（端口 0 → 系统分配，测试用）。</summary>
     public IPEndPoint? UdpEndpoint => _udp?.Client.LocalEndPoint as IPEndPoint;
+
+    /// <summary>JOIN 速率闸（M5-10 §12）：Dropped 丢弃计数观测；TryAcquire 由 JOIN 承载路径内调。</summary>
+    public RelayJoinGuard JoinGuard => _joinGuard;
 
     /// <summary>TCP 实际绑定端点（同上）。</summary>
     public IPEndPoint? TcpEndpoint => _tcpListener?.LocalEndpoint as IPEndPoint;
@@ -245,6 +250,10 @@ public sealed class RelayService : IAsyncDisposable
 
         if (wire.Length == JoinLen && wire[0] == JoinPrefix)
         {
+            // M5-10 §12 JOIN 速率闸（relay_join_rate_per_ip 现读即时生效）：解析/认领前扣桶
+            // ——只闸会话建立面，数据帧与 KEEPALIVE 不扣（07 §12）
+            if (!_joinGuard.TryAcquire(from.Address, await ReadJoinRateAsync().ConfigureAwait(false)))
+                return;
             RelayEntry? entry;
             RelayEnd? claimed;
             lock (_gate)
@@ -272,6 +281,14 @@ public sealed class RelayService : IAsyncDisposable
             other = ReferenceEquals(self, dataEntry.A) ? dataEntry.B : dataEntry.A;
         }
         await ForwardAsync(dataEntry, other!, wire.AsMemory(HeaderLen)).ConfigureAwait(false); // 剥离 8B → 密文原样转发
+    }
+
+    /// <summary>M5-10 §12：relay_join_rate_per_ip 现读（JOIN=会话建立频度低——逐次查库即改即生效，
+    /// HandleAllocateAsync 读 relay_enabled 同法）。</summary>
+    private async Task<int> ReadJoinRateAsync()
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync().ConfigureAwait(false);
+        return new ServerConfigStore(db).GetInt("relay_join_rate_per_ip");
     }
 
     private async Task SendUdpAsync(ReadOnlyMemory<byte> datagram, IPEndPoint to)
@@ -321,6 +338,9 @@ public sealed class RelayService : IAsyncDisposable
                 joinCts.CancelAfter(JoinTimeout);
                 var join = await ReadFrameAsync(stream, joinCts.Token).ConfigureAwait(false);
                 if (join is null || join.Length != JoinLen || join[0] != JoinPrefix) return;
+                // M5-10 §12 JOIN 速率闸：与 UDP 到达同源同桶（首帧 JOIN=会话建立；超限静默关）
+                if (!_joinGuard.TryAcquire(remote.Address, await ReadJoinRateAsync().ConfigureAwait(false)))
+                    return;
                 lock (_gate)
                 {
                     if (!_table.TryGetValue(BinaryPrimitives.ReadUInt64LittleEndian(join.AsSpan(1)), out entry)) return;

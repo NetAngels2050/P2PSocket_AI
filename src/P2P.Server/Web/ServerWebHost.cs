@@ -68,6 +68,10 @@ public sealed class ServerWebHostService(
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls($"http://{options.Listen.WebBind}:{options.Listen.Web}");
+        // M5-10/SEC-64 §12：管理 Web 并发连接上限（web_max_connections 启动期读——改动须重启，
+        // RestartKeys 同标；行缺省=不设限——Kestrel 缺省 null 不限，裸宿主[ExportTs]路径不阻断）
+        builder.WebHost.ConfigureKestrel(o =>
+            o.Limits.MaxConcurrentConnections = ReadWebMaxConnections(dbFactory));
         builder.Logging.ClearProviders(); // Serilog 在主 host；Web 容器不重复配（访问日志无需求）
         // 主容器单例实例注入（生命周期跟随主 host；管理端点组按需扩）
         builder.Services.AddSingleton(options);
@@ -140,5 +144,13 @@ public sealed class ServerWebHostService(
         }
 
         return app;
+    }
+
+    /// <summary>M5-10 §12：web_max_connections 启动期读（缺行/不可解析=null 不限——Kestrel 缺省同值）。</summary>
+    private static long? ReadWebMaxConnections(IDbContextFactory<AppDbContext> dbFactory)
+    {
+        using var db = dbFactory.CreateDbContext();
+        var row = db.ServerConfig.AsNoTracking().FirstOrDefault(c => c.Key == "web_max_connections");
+        return row is not null && int.TryParse(row.Value, out var n) ? n : null;
     }
 }

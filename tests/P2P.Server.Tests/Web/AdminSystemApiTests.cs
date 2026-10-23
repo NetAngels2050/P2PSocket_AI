@@ -117,6 +117,16 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
         Assert.Equal("20", byKey["autoban_fail_count"].GetProperty("value").GetString());
         Assert.Equal("3600", byKey["autoban_duration_sec"].GetProperty("value").GetString());
         Assert.False(byKey["autoban_enabled"].GetProperty("restartRequired").GetBoolean()); // tick 现读
+        // M5-10/SEC-64 监听面资源上限四键（07 §12）：前三 accept/JOIN 现读即时生效；
+        // web_max_connections 启动期入 Kestrel——RestartKeys 同标
+        Assert.Equal("64", byKey["control_conn_max_per_ip"].GetProperty("value").GetString());
+        Assert.Equal("1024", byKey["control_conn_max_total"].GetProperty("value").GetString());
+        Assert.Equal("30", byKey["relay_join_rate_per_ip"].GetProperty("value").GetString());
+        Assert.Equal("64", byKey["web_max_connections"].GetProperty("value").GetString());
+        Assert.False(byKey["control_conn_max_per_ip"].GetProperty("restartRequired").GetBoolean());
+        Assert.False(byKey["control_conn_max_total"].GetProperty("restartRequired").GetBoolean());
+        Assert.False(byKey["relay_join_rate_per_ip"].GetProperty("restartRequired").GetBoolean());
+        Assert.True(byKey["web_max_connections"].GetProperty("restartRequired").GetBoolean()); // Kestrel 启动期
     }
 
     [Fact]
@@ -195,6 +205,9 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
             ["autoban_enabled"] = "yes",                   // M5-08 非 0|1
             ["autoban_window_sec"] = "30",                 // M5-08 窗口下界（60s）
             ["autoban_duration_sec"] = "86401",            // M5-08 时长上界（86400s）
+            ["control_conn_max_per_ip"] = "0",             // M5-10 并发下界（1）
+            ["relay_join_rate_per_ip"] = "0",              // M5-10 速率下界（1）
+            ["web_max_connections"] = "abc",               // M5-10 非整数
             ["default_join_policy"] = "open",              // 域外
             ["relay_rate_limit"] = "99999999999",          // 超 int
             ["update_url"] = "ftp://x",                    // 非 http(s)
@@ -227,6 +240,7 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
             ["alert_webhook_url"] = "http://192.168.1.10:8080/hook",
             ["alert_login_fail_count"] = "20",
             ["autoban_fail_count"] = "30", // M5-08：同款库值持久（tick 现读生效）
+            ["control_conn_max_total"] = "2048", // M5-10：accept 现读即时生效
         });
         Assert.Equal(HttpStatusCode.OK, status);
         var items = body.GetProperty("data").GetProperty("items").EnumerateArray()
@@ -234,6 +248,7 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
         Assert.Equal("1", items["alert_enabled"].GetProperty("value").GetString());
         Assert.Equal("20", items["alert_login_fail_count"].GetProperty("value").GetString());
         Assert.Equal("30", items["autoban_fail_count"].GetProperty("value").GetString());
+        Assert.Equal("2048", items["control_conn_max_total"].GetProperty("value").GetString());
 
         await using var db = CreateDb();
         var cfg = db.ServerConfig.AsNoTracking().ToDictionary(c => c.Key, c => c.Value);

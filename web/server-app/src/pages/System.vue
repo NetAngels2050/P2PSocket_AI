@@ -41,6 +41,10 @@ const KEY_META: Record<string, { label: string; type: "bool" | "select" | "numbe
   alert_login_fail_count: { label: "登录失败告警阈值", type: "number" }, // M5-07 四入口 IP 聚合
   alert_register_count: { label: "注册告警阈值", type: "number" }, // M5-07 register+recover
   alert_stun_drop_count: { label: "STUN 丢弃告警阈值", type: "number" }, // M5-07 窗口增量
+  control_conn_max_per_ip: { label: "控制面单 IP 并发上限", type: "number" }, // M5-10/SEC-64（即时生效——accept 现读）
+  control_conn_max_total: { label: "控制面总并发上限", type: "number" }, // M5-10/SEC-64（即时生效）
+  relay_join_rate_per_ip: { label: "中继 JOIN 频控（次/s/IP）", type: "number" }, // M5-10/SEC-64（即时生效——JOIN 现读）
+  web_max_connections: { label: "Web 并发连接上限", type: "number" }, // M5-10/SEC-64（重启生效——Kestrel 启动期）
   stun_rate_per_ip: { label: "STUN 每 IP（pps）", type: "number" },
   stun_rate_per_device: { label: "STUN 每设备（QPS）", type: "number" },
   stun_circuit_pps: { label: "STUN 断路阈值（pps）", type: "number" },

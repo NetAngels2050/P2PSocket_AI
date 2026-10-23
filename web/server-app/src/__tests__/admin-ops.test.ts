@@ -157,17 +157,19 @@ describe("中继页走查", () => {
 // ── 系统页（完成判定：config 校验错误显示、审计过滤分页）────────────────
 
 describe("系统页走查", () => {
-  it("配置表 34 键渲染+重启生效 tag+bool 键即时保存", async () => {
+  it("配置表 38 键渲染+重启生效 tag+bool 键即时保存", async () => {
     const state = createDefaultServerState();
     const { wrapper } = await mountAdminPage(System, state, "/system");
     const table = wrapper.find('[data-testid="system-table"]');
-    await vi.waitFor(() => expect(table.findAll(".el-table__row")).toHaveLength(34));
-    expect(table.text()).toContain("重启生效"); // public_addr 等 7 键（含 register_rate_per_ip）
+    await vi.waitFor(() => expect(table.findAll(".el-table__row")).toHaveLength(38));
+    expect(table.text()).toContain("重启生效"); // public_addr 等 9 键（含 register_rate_per_ip/web_max_connections）
     expect(table.text()).toContain("中继服务"); // KEY_META 标签
     expect(table.text()).toContain("设备注册准入"); // M5-02 新键（即时生效，无重启 tag）
     expect(table.text()).toContain("登录延迟封顶"); // M5-04 新键（即时生效，无重启 tag）
     expect(table.text()).toContain("告警 Webhook"); // M5-07 新键（即时生效，无重启 tag）
     expect(table.text()).toContain("自动封禁"); // M5-08 新键（即时生效，无重启 tag）
+    expect(table.text()).toContain("控制面单 IP 并发上限"); // M5-10 新键（即时生效，无重启 tag）
+    expect(table.text()).toContain("Web 并发连接上限"); // M5-10 新键（重启生效 tag——Kestrel 启动期）
 
     // bool 键即时存（无草稿）：relay_enabled 翻 false
     const sw = wrapper.findComponent('[data-testid="system-bool-relay_enabled"]');

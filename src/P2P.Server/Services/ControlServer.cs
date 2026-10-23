@@ -20,6 +20,9 @@ public sealed class ControlServer : IAsyncDisposable
     private readonly TimeProvider _time;
     private readonly BlacklistStore? _blacklist; // M5-08：accept 闸（07 §13.3）
     private readonly ConcurrentDictionary<ControlSession, byte> _sessions = new(); // 停机时统一关闭
+    private readonly Lock _connGate = new();
+    private readonly Dictionary<IPAddress, int> _perIpConns = []; // M5-10 §12 单 IP 并发计数
+    private int _totalConns; // M5-10 §12 总并发计数
 
     private TcpListener? _listener;
     private Task? _acceptLoop;
@@ -78,18 +81,58 @@ public sealed class ControlServer : IAsyncDisposable
                 client.Close();
                 continue;
             }
+            // M5-10 §12 并发闸（黑名单同点、会话创建前）：单 IP/总量任一超限即关——
+            // 洪泛下会话表与内存不随连接数无界增长；两键 accept 时现读（控制连接低频，PUT 即时生效）
+            var remoteIp = ((IPEndPoint)client.Client.RemoteEndPoint!).Address;
+            int perIpMax, totalMax;
+            await using (var db = await _dbFactory.CreateDbContextAsync(ct).ConfigureAwait(false))
+            {
+                var cfg = new ServerConfigStore(db);
+                perIpMax = cfg.GetInt("control_conn_max_per_ip");
+                totalMax = cfg.GetInt("control_conn_max_total");
+            }
+            if (!TryAcquireConn(remoteIp, perIpMax, totalMax))
+            {
+                client.Close();
+                continue;
+            }
             var session = new ControlSession(client.GetStream(), _dbFactory, _registry, _dispatcher,
                 _options, _time, () => Interlocked.Increment(ref _hmacFailures),
                 (IPEndPoint)client.Client.RemoteEndPoint!, (IPEndPoint)client.Client.LocalEndPoint!);
             _sessions.TryAdd(session, 0);
-            _ = WatchAsync(session); // 读循环自管理生命周期；结束后移出跟踪表
+            _ = WatchAsync(session, remoteIp); // 读循环自管理生命周期；结束后移出跟踪表+归还配额
         }
     }
 
-    private async Task WatchAsync(ControlSession session)
+    private async Task WatchAsync(ControlSession session, IPAddress remoteIp)
     {
         try { await session.Completion.ConfigureAwait(false); } catch { }
+        ReleaseConn(remoteIp); // M5-10 §12：会话结束归还配额（先于移出——Sessions 观测到减员即已归还）
         _sessions.TryRemove(session, out _);
+    }
+
+    /// <summary>M5-10 §12 并发闸 try-acquire：单 IP/总量任一达限即拒（超限即关由调用方执行）。</summary>
+    private bool TryAcquireConn(IPAddress ip, int perIpMax, int totalMax)
+    {
+        lock (_connGate)
+        {
+            if (_totalConns >= totalMax) return false;
+            if (_perIpConns.GetValueOrDefault(ip) >= perIpMax) return false;
+            _totalConns++;
+            _perIpConns[ip] = _perIpConns.GetValueOrDefault(ip) + 1;
+            return true;
+        }
+    }
+
+    /// <summary>M5-10 §12：配额归还（会话结束——键清零即移除，防字典常驻）。</summary>
+    private void ReleaseConn(IPAddress ip)
+    {
+        lock (_connGate)
+        {
+            _totalConns = Math.Max(0, _totalConns - 1);
+            var n = _perIpConns.GetValueOrDefault(ip) - 1;
+            if (n <= 0) _perIpConns.Remove(ip); else _perIpConns[ip] = n;
+        }
     }
 
     /// <summary>停止监听并关闭全部在线会话。</summary>

@@ -70,6 +70,16 @@ public sealed class AdminSystemApi(
             "须为 1~1000000（次）"),
         ["alert_stun_drop_count"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000000,
             "须为 1~1000000000（次）"),
+        // M5-10/SEC-64 监听面资源上限四键（07 §12）：前三个 accept/JOIN 到达时现读即时生效；
+        // web_max_connections 启动期读入 Kestrel Limits（入 RestartKeys）
+        ["control_conn_max_per_ip"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 100000,
+            "须为 1~100000（连接）"),
+        ["control_conn_max_total"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000,
+            "须为 1~1000000（连接）"),
+        ["relay_join_rate_per_ip"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000,
+            "须为 1~1000000（次/秒/IP）"),
+        ["web_max_connections"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 100000,
+            "须为 1~100000（连接）"),
         ["punch_retention_days"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 3650, "须为 1~3650（天）"),
         ["stun_rate_per_ip"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000, "须为 1~1000000（pps）"),
         ["stun_rate_per_device"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 100000, "须为 1~100000（QPS）"),
@@ -86,10 +96,11 @@ public sealed class AdminSystemApi(
 
     /// <summary>启动期一次性读取的键（restartRequired=true）：public_addr/stun_* 在服务构造时读
     /// （M2-36/M2-06/M3-15），register_rate_per_ip 启动期读入 RegistrationGuard 令牌桶（M5-02），
+    /// web_max_connections 启动期读入 Kestrel Limits（M5-10/SEC-64），
     /// log_level 在 Serilog 装配时读——改动须重启方生效；其余键运行期现读即时生效
     /// （registration_open/device_registration_open/max_devices/default_join_policy/update_*/保留天数每轮现读）。</summary>
     private static readonly HashSet<string> RestartKeys =
-        ["public_addr", "stun_auth", "stun_alt_addr", "stun_rate_per_ip", "stun_rate_per_device", "stun_circuit_pps", "register_rate_per_ip", "log_level"];
+        ["public_addr", "stun_auth", "stun_alt_addr", "stun_rate_per_ip", "stun_rate_per_device", "stun_circuit_pps", "register_rate_per_ip", "log_level", "web_max_connections"];
 
     public void Map(WebApplication app)
     {

@@ -42,6 +42,12 @@ public static class DbInitializer
         ("alert_login_fail_count", "10"),  // login_fail_burst 阈值（登录族四入口 IP 维聚合）
         ("alert_register_count", "5"),     // register_burst 阈值（register+register_recover）
         ("alert_stun_drop_count", "200"),  // stun_drop_burst 阈值（StunGuard 三分桶窗口增量）
+        // M5-10/SEC-64 监听面资源上限（07 §12）：控制面并发双键+中继 JOIN 速率 accept/到达时现读
+        // 即时生效；web_max_connections 启动期读入 Kestrel Limits（改动须重启）
+        ("control_conn_max_per_ip", "64"),   // 控制面单 IP 并发连接上限（accept 闸现读）
+        ("control_conn_max_total", "1024"),  // 控制面总并发连接上限（同上）
+        ("relay_join_rate_per_ip", "30"),    // 中继 JOIN 到达速率 次/s/IP（UDP/TCP 同源同桶）
+        ("web_max_connections", "64"),       // 管理 Web Kestrel MaxConcurrentConnections（重启生效）
         ("punch_retention_days", "90"),
         ("stun_rate_per_ip", "50"),
         ("stun_rate_per_device", "10"),
