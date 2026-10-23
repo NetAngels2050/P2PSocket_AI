@@ -240,40 +240,39 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         await runtime2.DisposeAsync();
     }
 
-    // ── ①c M5-12 可配置化（07 §14.2，2026-10-24 用户裁定）：webTokenAuth 默认开 → 裸 HTTP 401；
-    //     关闭 → 同一目录重启后本地 API 免 token 可用 ──
+    // ── ①c M5-12 可配置化（07 §14.2 v1.83，默认关）：出厂免 token 可用；显式开启 → 裸 HTTP 401+带 token 200 ──
 
     [Fact]
-    public async Task 本地Web鉴权开关_默认开裸请求401_关闭后免token可用()
+    public async Task 本地Web鉴权开关_默认关免token可用_开启后裸401带token200()
     {
         await SeedRegisteredWithMappingAsync("rt-auth", null);
         var dir = Path.Combine(_rootDir, "rt-auth");
 
-        // 默认（webTokenAuth=true）：不带 Bearer 的裸请求被中间件拒（401+envelope{2001}）
+        // 默认（webTokenAuth=false，v1.83）：不带 Bearer 的裸请求直接可用（出厂形态）
         var runtime1 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic });
         await runtime1.StartAsync();
         using (var bare = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime1.WebPort}") })
+            Assert.Equal("running", await GetPhaseAsync(bare));
+        await runtime1.DisposeAsync();
+
+        // 开启（settings 落盘）→ 重启：裸请求 401+envelope{2001}；带 Bearer 200
+        var store = new SettingsStore(dir);
+        store.Load();
+        var on = store.Settings;
+        on.WebTokenAuth = true;
+        await store.SaveAsync(on);
+
+        var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic });
+        await runtime2.StartAsync();
+        using (var bare = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime2.WebPort}") })
         using (var denied = await bare.GetAsync("/api/system/state"))
         {
             Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
             var root = JsonDocument.Parse(await denied.Content.ReadAsStringAsync()).RootElement;
             Assert.Equal((int)ErrorCode.Unauthorized, root.GetProperty("code").GetInt32());
         }
-        await runtime1.DisposeAsync();
-
-        // 关闸（settings 落盘）→ 重启：同一裸请求 200（中间件未装配）
-        var store = new SettingsStore(dir);
-        store.Load();
-        var off = store.Settings;
-        off.WebTokenAuth = false;
-        await store.SaveAsync(off);
-
-        var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic });
-        await runtime2.StartAsync();
-        using (var bare = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime2.WebPort}") })
-        {
-            Assert.Equal("running", await GetPhaseAsync(bare)); // 免 token 直用
-        }
+        using (var http = LocalHttp(runtime2)) // 带当前 token 的客户端（生产=前端 sessionStorage 注入同构）
+            Assert.Equal("running", await GetPhaseAsync(http));
         await runtime2.DisposeAsync();
     }
 

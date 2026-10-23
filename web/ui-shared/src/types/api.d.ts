@@ -47,7 +47,7 @@ export interface GroupInfo {
 export interface ClientSettings {
   serverAddrs: string[];
   localWebPort: number;
-  /** M5-12 可配置化（07 §14.2）：本地 Web token 鉴权开关，默认 true——false=免鉴权（重启生效） */
+  /** M5-12 可配置化（07 §14.2 v1.83）：本地 Web token 鉴权开关，默认 false=免鉴权出厂可用——true=加固（重启生效） */
   webTokenAuth: boolean;
   punchConcurrency: number;
   keepaliveSec: number;

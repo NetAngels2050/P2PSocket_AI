@@ -12,10 +12,11 @@ public sealed class ClientSettings
     /// <summary>本地 Web 端口（默认 7100）。</summary>
     public int LocalWebPort { get; set; } = 7100;
 
-    /// <summary>本地 Web token 鉴权开关（SEC-82/M5-12，默认 true）——false=本地 API/WS 免鉴权
-    /// （07 §14.2 可配置化：2026-10-24 用户裁定易用性优先，关闭后页面无需 token 即可用；
-    /// 中间件启动期装配，变更重启生效）。</summary>
-    public bool WebTokenAuth { get; set; } = true;
+    /// <summary>本地 Web token 鉴权开关（SEC-82/M5-12 可配置化）。默认 <b>false</b>=免鉴权出厂可用
+    /// （2026-10-24 v1.83 用户裁定：服务形态无 token 自动入口——Interactive=console 才自动开浏览器，
+    /// 且 web-token 文件 ACL=SYSTEM/管理员，非管理员桌面进程无干净送达通道——每台新装机都会卡死首访；
+    /// 需要加固的机器在设置页显式开启，属 opt-in 加固）。中间件启动期装配，变更重启生效。</summary>
+    public bool WebTokenAuth { get; set; } = false;
 
     /// <summary>打洞并发数（1~5，OQ-1 决议，默认 3）。</summary>
     public int PunchConcurrency { get; set; } = 3;

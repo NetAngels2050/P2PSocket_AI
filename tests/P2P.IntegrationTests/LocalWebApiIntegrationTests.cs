@@ -677,15 +677,15 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
         Assert.Equal(ErrorCode.Ok, port.code);
         Assert.True(port.data!.Value.GetProperty("restartRequired").GetBoolean());
 
-        // M5-12 可配置化（07 §14.2）：webTokenAuth 默认 true 透出 + 关闭 → restartRequired=true（中间件启动期装配）+ 落盘可复读
-        Assert.True(before.data.Value.GetProperty("webTokenAuth").GetBoolean());
-        var authOff = await PutAsync(stack, "/api/settings", new { webTokenAuth = false });
-        Assert.Equal(ErrorCode.Ok, authOff.code);
-        Assert.True(authOff.data!.Value.GetProperty("restartRequired").GetBoolean());
-        Assert.False(authOff.data.Value.GetProperty("settings").GetProperty("webTokenAuth").GetBoolean());
+        // M5-12 可配置化（07 §14.2 v1.83，默认关）：webTokenAuth 默认 false 透出 + 开启 → restartRequired=true（中间件启动期装配）+ 落盘可复读
+        Assert.False(before.data.Value.GetProperty("webTokenAuth").GetBoolean());
+        var authOn = await PutAsync(stack, "/api/settings", new { webTokenAuth = true });
+        Assert.Equal(ErrorCode.Ok, authOn.code);
+        Assert.True(authOn.data!.Value.GetProperty("restartRequired").GetBoolean());
+        Assert.True(authOn.data.Value.GetProperty("settings").GetProperty("webTokenAuth").GetBoolean());
         var reread3 = new SettingsStore(Path.GetDirectoryName(stack.Settings.SettingsFilePath)!);
         reread3.Load();
-        Assert.False(reread3.Settings.WebTokenAuth);
+        Assert.True(reread3.Settings.WebTokenAuth);
     }
 
     // ── ⑥ WS login_state：登录/登出推送 ─────────────────────────────

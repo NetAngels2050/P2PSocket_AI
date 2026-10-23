@@ -25,8 +25,8 @@ const system = useSystemStore();
 const addrs = ref<string[]>([]);
 const punchConcurrency = ref(3);
 const localWebPort = ref(7100);
-/** M5-12 可配置化（07 §14.2）：本地 Web token 鉴权开关——关=页面免 token 可用（重启生效） */
-const webTokenAuth = ref(true);
+/** M5-12 可配置化（07 §14.2 v1.83）：本地 Web token 鉴权开关——默认关（出厂可用），开启=加固（重启生效） */
+const webTokenAuth = ref(false);
 const busy = ref(false);
 /** 提交后置位：localWebPort 变更须重启本地服务才生效（监听端口绑定时机） */
 const restartHint = ref(false);
@@ -366,7 +366,7 @@ async function triggerRekey(t: TunnelView) {
           data-testid="settings-webtoken-auth"
         />
         <div class="hint">
-          开=本地页面/API 须携带随服务启动轮换的 token（默认，更安全）；关=免鉴权直接访问（重启客户端生效）——关闭后任何本机程序也可驱动本地服务，仅在信任的本机环境使用
+          开=本地页面/API 须携带随服务启动轮换的 token（安全加固，公用/多账户机器建议——开启后从自动打开的 URL 或数据目录 web-token 文件取值进入）；关=免鉴权直接访问（默认，任何本机程序也可驱动本地服务）
         </div>
       </el-form-item>
 

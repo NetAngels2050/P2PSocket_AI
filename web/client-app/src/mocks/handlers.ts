@@ -202,7 +202,7 @@ export function createDefaultState(): MockState {
     settings: {
       serverAddrs: ["127.0.0.1:7101"],
       localWebPort: 7100,
-      webTokenAuth: true, // M5-12 可配置化默认值
+      webTokenAuth: false, // M5-12 可配置化默认值（v1.83：默认关=出厂可用）
       punchConcurrency: 3,
       keepaliveSec: 20,
       reconnect: { minSec: 1, maxSec: 30 },
