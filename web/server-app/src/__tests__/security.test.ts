@@ -1,4 +1,5 @@
 // M5-09 安全中心页走查测试（任务清单完成判定：聚合卡片展示/黑名单增删/处置按钮流/端点鉴权）。
+// M5-13：静态加密横幅（SEC-83、07 §14.3——未启用警示补配/在位解密失败计数）。
 // 装配同 admin-ops.test.ts（MSW+pinia/router/ElementPlus 独立实例；confirm 按可见 overlay 过滤——
 // ElMessageBox 关闭后 v-show 残留教训⑳；el-input attrs 透传落内部 input——M1-32 教训）。
 import { setupServer } from "msw/node";
@@ -108,6 +109,37 @@ describe("安全中心走查", () => {
     expect(table.text()).toContain("扫描探测");
     expect(table.text()).toContain("手动");
     expect(table.text()).toContain("永久"); // manual 无到期
+  });
+
+  it("M5-13 静态加密横幅：未启用警示补配；在位无横幅；解密失败计数透出", async () => {
+    // 默认态（mock encryption.enabled=false）：warning 横幅提示补配
+    const s1 = createDefaultServerState();
+    const r1 = await mountAdminPage(Security, s1, "/security");
+    await loaded(r1.wrapper);
+    const banner = r1.wrapper.find('[data-testid="sec-enc-banner"]');
+    expect(banner.exists()).toBe(true);
+    expect(banner.text()).toContain("静态数据加密未启用");
+    expect(banner.text()).toContain("masterKey"); // 补配指引
+    expect(r1.wrapper.find('[data-testid="sec-enc-failures"]').exists()).toBe(false);
+
+    // 在位且零失败：无任何加密横幅
+    const s2 = createDefaultServerState();
+    s2.encryption = { enabled: true, decryptFailures: 0 };
+    const r2 = await mountAdminPage(Security, s2, "/security");
+    await loaded(r2.wrapper);
+    expect(r2.wrapper.find('[data-testid="sec-enc-banner"]').exists()).toBe(false);
+    expect(r2.wrapper.find('[data-testid="sec-enc-failures"]').exists()).toBe(false);
+
+    // 在位且有不可解行（OQ-22② 凭据失效口径）：error 横幅透出计数
+    const s3 = createDefaultServerState();
+    s3.encryption = { enabled: true, decryptFailures: 3 };
+    const r3 = await mountAdminPage(Security, s3, "/security");
+    await loaded(r3.wrapper);
+    expect(r3.wrapper.find('[data-testid="sec-enc-banner"]').exists()).toBe(false);
+    const failures = r3.wrapper.find('[data-testid="sec-enc-failures"]');
+    expect(failures.exists()).toBe(true);
+    expect(failures.text()).toContain("3 次");
+    expect(failures.text()).toContain("解绑后重注册");
   });
 
   it("加黑流：dialog 填 IP+原因 → POST mock 落态 → 表格新行；非法 IP 400 提示且不入列", async () => {

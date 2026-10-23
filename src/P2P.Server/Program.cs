@@ -95,10 +95,42 @@ Log.Logger = new LoggerConfiguration()
 builder.Logging.ClearProviders();
 builder.Services.AddSerilog();
 
+// ── M5-13 静态数据加密（SEC-83、07 §14.3）──────────────────────────────
+// 密钥解析：环境变量优先于 appsettings（密钥不落库口径）；缺失/非法=加密不启用+不阻断启动
+// （P2 纵深防御层——阻断会使存量部署升级即断服；库文件权限 0600 仍为第一道防线），
+// 启动 ERROR 日志+管理页横幅提示补配（/api/security/overview encryption.enabled）。
+// 位于 Serilog 之后：迁移与缺钥 ERROR 均有日志载体。
+var masterKey = Environment.GetEnvironmentVariable("P2P_MASTER_KEY") ?? options.Security.MasterKey;
+var masterKeyPrev = Environment.GetEnvironmentVariable("P2P_MASTER_KEY_PREV") ?? options.Security.MasterKeyPrev;
+var cipher = DeviceSecretCipher.TryCreate(masterKey, masterKeyPrev, out var keyReason);
+if (cipher is null)
+    Log.Error("静态数据加密未启用（SEC-83，07 §14.3）：{Reason}", keyReason);
+else
+{
+    // 存量迁移（earlyFactory=明文工厂裸读写，DeviceSecretMigrator 四分支）：明文行加密+
+    // prev 密文重加密（幂等）；不可解行 ERROR 跳过不阻断——启动即完成，运行时读写全经密文工厂
+    var (encrypted, skipped) = DeviceSecretMigrator.Migrate(earlyFactory, cipher);
+    if (encrypted > 0 || skipped > 0)
+        Log.Information("静态数据加密迁移完成：加密/重加密 {Encrypted} 行，跳过不可解 {Skipped} 行", encrypted, skipped);
+}
+
+// Linux 库文件权限核对 0600（07 §14.1/§14.3：SQLite 端不感知文件系统，宿主侧确保；WAL 伴生文件一并收紧）
+if (OperatingSystem.IsLinux())
+{
+    var dbFile = Path.GetFullPath(options.Database.Path);
+    foreach (var f in new[] { dbFile, dbFile + "-wal", dbFile + "-shm" })
+        if (File.Exists(f))
+            File.SetUnixFileMode(f, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+}
+
 // ── 服务装配（01 §3.1；解析顺序见 ServerHostService）───────────────────
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(options);
-builder.Services.AddSingleton<IDbContextFactory<AppDbContext>>(ServerDatabase.CreateFactory(options.Database.Path));
+builder.Services.AddSingleton<IDbContextFactory<AppDbContext>>(ServerDatabase.CreateFactory(options.Database.Path, cipher));
+// M5-13：cipher 单例（与 DI 工厂同一实例——DecryptFailures 计数共享）；未配置不注册
+// （ServerWebHostService 可选尾参取默认 null，安全中心 Encryption 节呈 enabled=false）
+if (cipher is not null)
+    builder.Services.AddSingleton(cipher);
 builder.Services.AddSingleton<DeviceRegistry>();
 builder.Services.AddSingleton<AuditLogger>();
 builder.Services.AddSingleton<Authorizer>();

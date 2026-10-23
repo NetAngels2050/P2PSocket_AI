@@ -234,6 +234,7 @@ internal static partial class TsGen // 生成逻辑集中（顶层语句宿主�
         typeof(P2P.Server.Services.BlacklistEntry), // M5-09 黑名单快照行（M5-08 存储型复用）
         typeof(AutobanRuleView),
         typeof(SecurityOverviewView),
+        typeof(EncryptionView),     // M5-13 静态加密状态（SEC-83，07 §14.3——overview 尾参）
         typeof(LockdownResultView),
     ];
 

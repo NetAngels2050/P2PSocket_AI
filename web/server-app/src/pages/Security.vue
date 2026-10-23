@@ -91,6 +91,28 @@ onMounted(() => void security.refresh());
   <main class="page">
     <h2>安全</h2>
 
+    <!-- M5-13 静态数据加密状态（SEC-83、07 §14.3）：未启用提示补配；在位但存在不可解行警示计数 -->
+    <el-alert
+      v-if="loaded && !security.overview!.encryption.enabled"
+      data-testid="sec-enc-banner"
+      class="sec-enc-alert"
+      type="warning"
+      :closable="false"
+      show-icon
+      title="静态数据加密未启用"
+      description="未配置 security.masterKey（07 §14.3）——devices.device_secret 以明文存储（库文件权限为第一道防线）。补配后重启即启用并自动完成存量迁移。"
+    />
+    <el-alert
+      v-else-if="loaded && security.overview!.encryption.decryptFailures > 0"
+      data-testid="sec-enc-failures"
+      class="sec-enc-alert"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="`device_secret 解密失败 ${security.overview!.encryption.decryptFailures} 次（自启动累计）`"
+      description="存在不可解密文行（配错钥或密文损坏）——相关设备凭据视为失效，恢复路径为解绑后重注册。"
+    />
+
     <el-row
       v-if="loaded"
       :gutter="12"
@@ -323,6 +345,10 @@ onMounted(() => void security.refresh());
 </template>
 
 <style scoped>
+.sec-enc-alert {
+  margin-bottom: 12px;
+}
+
 .sec-cards {
   margin-bottom: 12px;
 }

@@ -31,6 +31,13 @@ const DOCUMENTED: ReadonlyArray<{ path: string; methods: readonly string[] }> = 
   { path: "/api/relay/config", methods: ["GET", "PUT"] },
   { path: "/api/system/config", methods: ["GET", "PUT"] },
   { path: "/api/audit-logs", methods: ["GET"] },
+  // M5-07/08/09 安全中心五端点（SEC-71/72/73、07 §13、04 §3.2 随更；一致性集补齐 2026-10-23
+  // ——M5-07 起期望集漏更，ui-shared 套件此前不在回归面故未拦截）
+  { path: "/api/security/overview", methods: ["GET"] },
+  { path: "/api/security/lockdown", methods: ["POST"] },
+  { path: "/api/security/alert-test", methods: ["POST"] },
+  { path: "/api/security/blacklist", methods: ["POST"] },
+  { path: "/api/security/blacklist/{ip}", methods: ["DELETE"] },
 ];
 
 describe("export-ts 服务端生成物", () => {

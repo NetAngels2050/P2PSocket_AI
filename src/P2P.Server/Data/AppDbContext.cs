@@ -8,8 +8,13 @@ namespace P2P.Server.Data;
 /// 服务端数据库（03 §2：SQLite，11 张蛇形命名表）。
 /// 时间列 TEXT ISO8601 UTC；Guid 列 TEXT；布尔/整数 INTEGER。
 /// </summary>
-public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
+public sealed class AppDbContext(DbContextOptions<AppDbContext> options, DeviceSecretCipher? cipher = null) : DbContext(options)
 {
+    /// <summary>M5-13 静态加密（SEC-83、07 §14.3）：在位时 device_secret 挂值转换器透明加解密。
+    /// 模型按 cipher 实例分缓存（AppDbContextCacheKeyFactory——装配见 ServerDatabase.CreateFactory：
+    /// EF 默认按上下文类型缓存模型，加密/明文上下文同进程并存会互踩首个构建的模型）。</summary>
+    internal DeviceSecretCipher? Cipher { get; } = cipher;
+
     public DbSet<User> Users => Set<User>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<Group> Groups => Set<Group>();
@@ -59,7 +64,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             e.HasIndex(x => x.RemoteCode).IsUnique();
             e.Property(x => x.VirtualIp).HasColumnName("virtual_ip");
             e.Property(x => x.StaticPubKey).HasColumnName("static_pub_key");
-            e.Property(x => x.DeviceSecret).HasColumnName("device_secret");
+            var secret = e.Property(x => x.DeviceSecret).HasColumnName("device_secret");
+            // M5-13（SEC-83、07 §14.3）：cipher 在位时列级透明加解密（读路径零改动；写向恒 61B 密文）
+            if (Cipher is not null)
+                secret.HasConversion(v => Cipher.Encrypt(v), s => Cipher.DecryptOrRaw(s));
             e.Property(x => x.LastSeenAt).HasColumnName("last_seen_at").HasConversion(DateTimeText);
             e.Property(x => x.Disabled).HasColumnName("disabled");
             e.Property(x => x.CreatedAt).HasColumnName("created_at").HasConversion(DateTimeText);

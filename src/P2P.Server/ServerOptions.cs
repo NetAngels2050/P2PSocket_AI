@@ -18,6 +18,10 @@ public sealed class ServerOptions
     public RelaySection Relay { get; set; } = new();
     public LoggingSection Logging { get; set; } = new();
 
+    /// <summary>静态数据加密（M5-13/SEC-83、07 §14.3、08 §5.1）：密钥仅 appsettings/环境变量（不落库）；
+    /// 非法值不拒启（NFR-35 例外——按未配置处理+ERROR 日志+管理页横幅，07 §14.3「缺失不阻断」口径）。</summary>
+    public SecuritySection Security { get; set; } = new();
+
     public sealed class ListenSection
     {
         public int Control { get; set; } = 7000;
@@ -31,6 +35,13 @@ public sealed class ServerOptions
     public sealed class DatabaseSection
     {
         public string Path { get; set; } = "data/p2p.db";
+    }
+
+    /// <summary>M5-13/SEC-83（07 §14.3）：masterKey 64 hex=32B；P2P_MASTER_KEY/_PREV 环境变量优先（Program 解析）。</summary>
+    public sealed class SecuritySection
+    {
+        public string MasterKey { get; set; } = "";
+        public string MasterKeyPrev { get; set; } = "";
     }
 
     public sealed class HeartbeatSection

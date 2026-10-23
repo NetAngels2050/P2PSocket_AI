@@ -3,8 +3,11 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Time.Testing;
+using P2P.Core.Crypto;
 using P2P.Server.Data;
 using P2P.Server.Services;
 using P2P.Server.Web;
@@ -280,6 +283,38 @@ public sealed class SecurityApiTests : IAsyncLifetime
         var stun = data.GetProperty("stun"); // 未注 STUN 件——零值快照 + since null
         Assert.Equal(0, stun.GetProperty("rate").GetInt32());
         Assert.Equal(JsonValueKind.Null, stun.GetProperty("since").ValueKind);
+
+        var enc = data.GetProperty("encryption"); // M5-13（SEC-83）：未注 cipher（未配 masterKey）——enabled=false
+        Assert.False(enc.GetProperty("enabled").GetBoolean());
+        Assert.Equal(0, enc.GetProperty("decryptFailures").GetInt32());
+    }
+
+    [Fact]
+    public async Task Overview_静态加密状态_cipher在位透出解密失败计数()
+    {
+        // 独立裸宿主（同 ExportTs 形态——SecurityApi 直挂；与 _web 的未注 cipher 形态互补）
+        var cipher = new DeviceSecretCipher(
+            Convert.ToHexString(RandomGenerator.Bytes(32)).ToLowerInvariant());
+        cipher.DecryptOrRaw(new byte[61]); // keyTag 0 不匹配 → 凭据失效口径计数+1（OQ-22②）
+
+        var factory = ServerDatabase.CreateFactoryFromDataSource(_db.DataSource, cipher);
+        var port = Random.Shared.Next(21000, 27000);
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
+        var app = builder.Build();
+        new SecurityApi(factory, _time, _audit, cipher: cipher).Map(app);
+        await app.StartAsync();
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+            var resp = await http.GetAsync("/api/security/overview");
+            Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+            var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStreamAsync());
+            var enc = body.GetProperty("data").GetProperty("encryption");
+            Assert.True(enc.GetProperty("enabled").GetBoolean());
+            Assert.Equal(1, enc.GetProperty("decryptFailures").GetInt32());
+        }
+        finally { await app.StopAsync(); }
     }
 
     [Fact]

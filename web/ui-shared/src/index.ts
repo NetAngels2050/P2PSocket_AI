@@ -83,6 +83,7 @@ export type {
   BlacklistEntry,
   AutobanRuleView,
   SecurityOverviewView,
+  EncryptionView,
   LockdownResultView,
   MappingStatusProjection,
 } from "./types/api-server";

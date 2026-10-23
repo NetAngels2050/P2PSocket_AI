@@ -9,6 +9,7 @@ import type {
   BlacklistEntry,
   DashboardView,
   DeviceView,
+  EncryptionView,
   GroupRequestView,
   GroupView,
   MappingView,
@@ -36,6 +37,7 @@ export interface MockServerState {
   blacklist: BlacklistEntry[]; // M5-09 安全中心黑名单（增删端点真实改此态）
   lockdownKicked: number; // M5-09 lockdown 响应 kicked（mock 固定值，断言用）
   securityCounts: { today: SecurityCountView; week: SecurityCountView; stun: SecurityStunView }; // M5-09 overview 计数节
+  encryption: EncryptionView; // M5-13 静态加密状态（SEC-83——横幅用例可翻转）
 }
 
 /// 测试固定身份（过滤联动断言用稳定 UUID）
@@ -185,6 +187,7 @@ export function createDefaultServerState(): MockServerState {
       week: { loginFail: 9, register: 4, deny: 2 },
       stun: { rate: 12, auth: 3, circuit: 0, since: "2026-10-20T00:00:00Z" },
     },
+    encryption: { enabled: false, decryptFailures: 0 }, // M5-13 默认未配置（横幅警示路径）
   };
 }
 
@@ -494,6 +497,7 @@ export function createServerHandlers(state: MockServerState) {
           durationSec: 3600,
         },
         registrationOpen: (state.config.device_registration_open ?? "1") === "1",
+        encryption: state.encryption, // M5-13（SEC-83、07 §14.3）：enabled=false=未配 masterKey
       } satisfies SecurityOverviewView);
     }),
 

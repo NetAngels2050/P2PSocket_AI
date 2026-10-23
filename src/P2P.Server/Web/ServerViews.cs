@@ -148,11 +148,17 @@ public sealed record SecurityStunView(long Rate, long Auth, long Circuit, DateTi
 /// <summary>自动封禁规则现值（07 §13.3 四键 tick 现读回显；改键经 /system 配置页）。</summary>
 public sealed record AutobanRuleView(bool Enabled, int WindowSec, int FailCount, int DurationSec);
 
-/// <summary>安全中心聚合（GET /api/security/overview）：hits=黑名单四面命中计数（内存态重启清零）。</summary>
+/// <summary>安全中心聚合（GET /api/security/overview）：hits=黑名单四面命中计数（内存态重启清零）。
+/// M5-13 尾参 encryption=静态数据加密状态（SEC-83、07 §14.3）。</summary>
 public sealed record SecurityOverviewView(
     SecurityCountView Today, SecurityCountView Week, SecurityStunView Stun,
     List<Services.BlacklistEntry> Blacklist, Dictionary<string, long> Hits,
-    AutobanRuleView Autoban, bool RegistrationOpen);
+    AutobanRuleView Autoban, bool RegistrationOpen, EncryptionView Encryption);
+
+/// <summary>静态数据加密状态（M5-13、SEC-83、07 §14.3）：enabled=masterKey 在位（device_secret
+/// 列加密生效+存量迁移已执行）；decryptFailures=进程内解密失败计数（不可解行凭据失效口径
+/// OQ-22②；重启清零）。</summary>
+public sealed record EncryptionView(bool Enabled, int DecryptFailures);
 
 /// <summary>踢全部会话结果（POST /api/security/lockdown，07 §13.4）：kicked=断开的在线控制会话数。</summary>
 public sealed record LockdownResultView(int Kicked);

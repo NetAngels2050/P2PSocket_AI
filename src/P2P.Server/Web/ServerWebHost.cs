@@ -38,7 +38,8 @@ public sealed class ServerWebHostService(
     LoginThrottle? loginThrottle = null,
     AlertPusher? alertPusher = null,
     BlacklistStore? blacklist = null,
-    ControlServer? control = null) : IHostedService
+    ControlServer? control = null,
+    DeviceSecretCipher? cipher = null) : IHostedService
 {
     private WebApplication? _app;
 
@@ -48,7 +49,7 @@ public sealed class ServerWebHostService(
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _app = Build(options, time, sessions, dbFactory, audit, admin, registry, groups, relay, stun,
-            limiter, WebRootOverride, loginThrottle, alertPusher, blacklist, control);
+            limiter, WebRootOverride, loginThrottle, alertPusher, blacklist, control, cipher);
         await _app.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -64,7 +65,7 @@ public sealed class ServerWebHostService(
         RelayService? relay = null, StunService? stun = null, RelayRateLimiter? limiter = null,
         string? webRootOverride = null, LoginThrottle? loginThrottle = null,
         AlertPusher? alertPusher = null, BlacklistStore? blacklist = null,
-        ControlServer? control = null)
+        ControlServer? control = null, DeviceSecretCipher? cipher = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls($"http://{options.Listen.WebBind}:{options.Listen.Web}");
@@ -100,7 +101,7 @@ public sealed class ServerWebHostService(
         // 07 §13.3——处置审计 ip_block/ip_unblock）+ overview 聚合/lockdown 踢全部会话
         // （M5-09，07 §13.2/§13.4）
         if (blacklist is not null || alertPusher is not null)
-            new SecurityApi(dbFactory, time, audit, blacklist, alertPusher, stun, control).Map(app);
+            new SecurityApi(dbFactory, time, audit, blacklist, alertPusher, stun, control, cipher).Map(app);
 
         // M5-08 IP 黑名单中间件（07 §13.3）：全端点、认证之前——被封 IP 一切端点 403 {2003 FORBIDDEN}
         // （含 /api/auth/login：连登录面一并拒，防止绕面探测）；命中只计数不审计（OQ-22①）

@@ -24,7 +24,8 @@ public sealed class SecurityApi(
     BlacklistStore? blacklist = null,
     AlertPusher? alert = null,
     StunService? stun = null,
-    ControlServer? control = null)
+    ControlServer? control = null,
+    DeviceSecretCipher? cipher = null)
 {
     private static readonly string[] LoginFailEvents = ["login_failed", "admin_login_fail"];
     private static readonly string[] RegisterEvents = ["register", "register_recover"];
@@ -69,7 +70,12 @@ public sealed class SecurityApi(
                 Autoban: new AutobanRuleView(
                     cfg["autoban_enabled"] == "1", int.Parse(cfg["autoban_window_sec"]),
                     int.Parse(cfg["autoban_fail_count"]), int.Parse(cfg["autoban_duration_sec"])),
-                RegistrationOpen: cfg["device_registration_open"] == "1"));
+                RegistrationOpen: cfg["device_registration_open"] == "1",
+                // M5-13（SEC-83、07 §14.3）：cipher 缺省（未配置/裸 API）呈 enabled=false；
+                // 在位时 decryptFailures=进程内解密失败计数（不可解行=凭据失效口径，OQ-22②）
+                Encryption: cipher is null
+                    ? new EncryptionView(false, 0)
+                    : new EncryptionView(true, cipher.DecryptFailures)));
         });
 
         // 踢全部会话（M5-09，07 §13.4 定案）：断开全部在线 ControlSession+审计；不设拒连窗
