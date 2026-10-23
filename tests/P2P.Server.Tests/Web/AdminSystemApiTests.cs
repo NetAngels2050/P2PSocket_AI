@@ -127,6 +127,9 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
         Assert.False(byKey["control_conn_max_total"].GetProperty("restartRequired").GetBoolean());
         Assert.False(byKey["relay_join_rate_per_ip"].GetProperty("restartRequired").GetBoolean());
         Assert.True(byKey["web_max_connections"].GetProperty("restartRequired").GetBoolean()); // Kestrel 启动期
+        // M5-14/SEC-84 升级链路：产物哈希清单键（种子空=未录入；0x03 现读即时生效）
+        Assert.Equal("", byKey["update_artifact_sha256"].GetProperty("value").GetString());
+        Assert.False(byKey["update_artifact_sha256"].GetProperty("restartRequired").GetBoolean());
     }
 
     [Fact]
@@ -210,7 +213,8 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
             ["web_max_connections"] = "abc",               // M5-10 非整数
             ["default_join_policy"] = "open",              // 域外
             ["relay_rate_limit"] = "99999999999",          // 超 int
-            ["update_url"] = "ftp://x",                    // 非 http(s)
+            ["update_url"] = "http://x",                   // M5-14/SEC-84：http 拒收（强制 https）
+            ["update_artifact_sha256"] = "not-json",       // M5-14：非 JSON
         };
         foreach (var (key, value) in cases)
         {
@@ -255,6 +259,59 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
         Assert.Equal("1", cfg["alert_enabled"]); // 持久化（AlertPusher 下 tick 现读生效）
         Assert.Equal("http://192.168.1.10:8080/hook", cfg["alert_webhook_url"]);
         Assert.Equal("30", cfg["autoban_fail_count"]);
+    }
+
+    // ── M5-14（SEC-84、07 §14.4）：update_url 强制 https + 产物哈希键形状 ──
+
+    [Fact]
+    public async Task PUT_update_url_强制https_http拒收_https放行()
+    {
+        // http 一律拒收（含大小写混写/非 http(s) 家族）——存量值由 0x03 运行时屏蔽兜底
+        foreach (var bad in new[] { "http://example.com/dl", "HTTP://example.com/dl", "ftp://x" })
+        {
+            var (status, _) = await PutAsync(new Dictionary<string, string> { ["update_url"] = bad });
+            Assert.Equal(HttpStatusCode.BadRequest, status);
+        }
+        await using (var db = CreateDb())
+            Assert.Equal("", db.ServerConfig.AsNoTracking().Single(c => c.Key == "update_url").Value); // 拒收不动库
+
+        var (ok, body) = await PutAsync(new Dictionary<string, string> { ["update_url"] = "https://example.com/dl" });
+        Assert.Equal(HttpStatusCode.OK, ok);
+        Assert.Equal("https://example.com/dl",
+            body.GetProperty("data").GetProperty("items").EnumerateArray()
+                .Single(i => i.GetProperty("key").GetString() == "update_url").GetProperty("value").GetString());
+        await using (var db = CreateDb())
+            Assert.Equal("https://example.com/dl",
+                db.ServerConfig.AsNoTracking().Single(c => c.Key == "update_url").Value);
+    }
+
+    [Fact]
+    public async Task PUT_产物哈希键_形状校验与合法写入()
+    {
+        // 非法形状：JSON 数组/未知产物名/大写 hex/短 hex/值非字符串
+        var bad = new[]
+        {
+            """["windows-setup"]""",                                                        // 数组非对象
+            """{"win-setup":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}""", // 产物名域外
+            """{"windows-setup":"E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"}""", // 大写拒收
+            """{"windows-setup":"e3b0"}""",                                                  // 非 hex64
+            """{"windows-setup":123}""",                                                     // 值非字符串
+        };
+        foreach (var value in bad)
+        {
+            var (status, _) = await PutAsync(new Dictionary<string, string> { ["update_artifact_sha256"] = value });
+            Assert.Equal(HttpStatusCode.BadRequest, status);
+        }
+        await using (var db = CreateDb())
+            Assert.Equal("", db.ServerConfig.AsNoTracking().Single(c => c.Key == "update_artifact_sha256").Value);
+
+        // 合法：三产物名全集（子集亦合法）；持久化后 0x03 原样下发（透传见 UpdateInfoTests）
+        const string json =
+            """{"windows-setup":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","linux-tar":"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90","server-tar":"0000000000000000000000000000000000000000000000000000000000000000"}""";
+        var (ok, _) = await PutAsync(new Dictionary<string, string> { ["update_artifact_sha256"] = json });
+        Assert.Equal(HttpStatusCode.OK, ok);
+        await using (var db = CreateDb())
+            Assert.Equal(json, db.ServerConfig.AsNoTracking().Single(c => c.Key == "update_artifact_sha256").Value);
     }
 
     [Fact]

@@ -154,4 +154,57 @@ public sealed class UpdateInfoTests : IAsyncLifetime
         var resp = await client.ReceiveAsync<UpdateInfoResponse>() ?? throw new IOException("0x03 无应答");
         Assert.Equal(1, resp.MinProtocol);
     }
+
+    // ── M5-14（SEC-84、07 §14.4）：update_url 强制 https——存量 http 运行时屏蔽 ──
+
+    [Fact]
+    public async Task UpdateInfo_HttpUrl_MaskedToEmpty_NotesAppended()
+    {
+        // 存量 http 值（PUT 已拒收，此为外部改库/历史存量路径）：0x03 应答置空 + notes 追加提示
+        await using (var db = CreateDb())
+        {
+            db.ServerConfig.Single(c => c.Key == "update_url").Value = "http://insecure.example/dl";
+            db.ServerConfig.Single(c => c.Key == "update_notes").Value = "维护公告：周三 02:00";
+            await db.SaveChangesAsync();
+        }
+        var client = await ConnectAsync();
+        await client.HelloAsync(deviceId: null, version: (ushort)(ProtocolVersion.Current + 1));
+        await client.SendAsync(new UpdateInfoRequest(client.NextSeq(), client.Now(), MsgType.UpdateInfo),
+            sign: false);
+        var resp = await client.ReceiveAsync<UpdateInfoResponse>() ?? throw new IOException("0x03 无应答");
+        Assert.Equal("", resp.UpgradeUrl); // 屏蔽：不下发 http 地址
+        Assert.Contains("维护公告", resp.Notes); // 原 notes 保留
+        Assert.Contains("管理员未配置有效升级地址", resp.Notes); // 追加提示（07 §14.4 文案）
+    }
+
+    [Fact]
+    public async Task UpdateInfo_ArtifactSha256_PassedThrough_EmptyWhenUnset()
+    {
+        // 产物哈希清单原样下发（形状校验在 PUT 入口，0x03 不再解析）；未录入=空串
+        var json = """{"windows-setup":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","server-tar":"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"}""";
+        await using (var db = CreateDb())
+        {
+            db.ServerConfig.Single(c => c.Key == "update_artifact_sha256").Value = json;
+            await db.SaveChangesAsync();
+        }
+        var client = await ConnectAsync();
+        await client.HelloAsync(deviceId: null, version: (ushort)(ProtocolVersion.Current + 1));
+        await client.SendAsync(new UpdateInfoRequest(client.NextSeq(), client.Now(), MsgType.UpdateInfo),
+            sign: false);
+        var resp = await client.ReceiveAsync<UpdateInfoResponse>() ?? throw new IOException("0x03 无应答");
+        Assert.Equal(json, resp.ArtifactSha256);
+
+        // 未录入（种子空值）：下空串=前端不展示哈希区
+        await using (var db = CreateDb())
+        {
+            db.ServerConfig.Single(c => c.Key == "update_artifact_sha256").Value = "";
+            await db.SaveChangesAsync();
+        }
+        var client2 = await ConnectAsync();
+        await client2.HelloAsync(deviceId: null, version: (ushort)(ProtocolVersion.Current + 1));
+        await client2.SendAsync(new UpdateInfoRequest(client2.NextSeq(), client2.Now(), MsgType.UpdateInfo),
+            sign: false);
+        var resp2 = await client2.ReceiveAsync<UpdateInfoResponse>() ?? throw new IOException("0x03 无应答");
+        Assert.Equal("", resp2.ArtifactSha256);
+    }
 }

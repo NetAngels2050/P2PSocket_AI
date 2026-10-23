@@ -837,6 +837,54 @@ describe("Upgrade 走查（M2-29，FR-C-904）", () => {
     expect(wrapper.find('[data-testid="upgrade-reason-alert"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="upgrade-version"]').text()).toContain("0.3.0");
   });
+
+  // ── M5-14/SEC-84（07 §14.4）：产物哈希按平台展示 + 屏蔽态 URL 空 ──
+
+  it("artifactSha256 清单：Windows 取 windows-setup 项展示；未录入不展示", async () => {
+    const originalAgent = window.navigator.userAgent;
+    Object.defineProperty(window.navigator, "userAgent",
+      { value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", configurable: true });
+    try {
+      const state = createDefaultState();
+      state.upgrade = {
+        latestVersion: "0.4.2",
+        minProtocol: 1,
+        maxProtocol: 2,
+        upgradeUrl: "https://example.com/dl",
+        notes: "n",
+        artifactSha256: JSON.stringify({
+          "windows-setup": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "linux-tar": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        }),
+      };
+      const { wrapper } = await mountPage(Upgrade, state, "/upgrade");
+      expect(wrapper.find('[data-testid="upgrade-hash"]').exists()).toBe(true);
+      expect(wrapper.find('[data-testid="upgrade-hash"]').text())
+        .toContain("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+      // 未录入（空串）：哈希区不渲染
+      const bare = createDefaultState();
+      bare.upgrade = { ...bare.upgrade, artifactSha256: "" };
+      const { wrapper: bareWrapper } = await mountPage(Upgrade, bare, "/upgrade");
+      expect(bareWrapper.find('[data-testid="upgrade-hash"]').exists()).toBe(false);
+    } finally {
+      Object.defineProperty(window.navigator, "userAgent", { value: originalAgent, configurable: true });
+    }
+  });
+
+  it("http 屏蔽态：upgradeUrl 空显示「未配置」，notes 含管理员提示", async () => {
+    const state = createDefaultState();
+    state.upgrade = {
+      latestVersion: "0.4.2",
+      minProtocol: 1,
+      maxProtocol: 2,
+      upgradeUrl: "",
+      notes: "维护公告\n管理员未配置有效升级地址",
+    };
+    const { wrapper } = await mountPage(Upgrade, state, "/upgrade");
+    expect(wrapper.find('[data-testid="upgrade-url"]').exists()).toBe(false); // 空地址不渲染链接
+    expect(wrapper.find('[data-testid="upgrade-url-empty"]').text()).toContain("未配置");
+    expect(wrapper.find('[data-testid="upgrade-notes"]').text()).toContain("管理员未配置有效升级地址");
+  });
 });
 
 // ── 关于页（FR-C-812，2026-10-21）─────────────────────────────────

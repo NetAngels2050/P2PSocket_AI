@@ -22,6 +22,28 @@ public class PcpM2MessageTests
         Assert.Equal(1, decoded.MaxProtocol);
         Assert.Equal("https://example.com/dl", decoded.UpgradeUrl);
         Assert.Equal("修复与说明", decoded.Notes);
+        Assert.Null(decoded.ArtifactSha256); // M5-14 尾部可选字段缺省 null
+    }
+
+    [Fact]
+    public void UpdateInfo_ArtifactSha256_RoundTrip_And_LegacyFrame_Tolerated()
+    {
+        // M5-14/SEC-84：尾部可选字段（Key 8）随帧往返
+        var json = """{"windows-setup":"a1b2c3d4","server-tar":"e5f6"}""";
+        var resp = new UpdateInfoResponse(2, 2UL, MsgType.UpdateInfo, "1.2.0",
+            MinProtocol: 1, MaxProtocol: 1, UpgradeUrl: "https://example.com/dl", Notes: "n", ArtifactSha256: json);
+        var decoded = PcpCodec.Decode<UpdateInfoResponse>(PcpCodec.Encode(resp));
+        Assert.Equal(json, decoded.ArtifactSha256);
+
+        // 旧服务端 8 元素帧（无 Key 8）→ 新 DTO 容忍缺失、尾部取缺省 null（尾部加法向后兼容，
+        // MessagePack-CSharp 对带默认值的尾参缺省容错——新客户端连旧服务端版本拒答窗口仍可渲染）
+        var legacy = MessagePack.MessagePackSerializer.Serialize(new object[]
+            { 2, 2UL, MsgType.UpdateInfo, "1.2.0", 1, 1, "https://example.com/dl", "修复与说明" });
+        var fromLegacy = PcpCodec.Decode<UpdateInfoResponse>(legacy);
+        Assert.Equal("1.2.0", fromLegacy.LatestVersion);
+        Assert.Equal("https://example.com/dl", fromLegacy.UpgradeUrl);
+        Assert.Equal("修复与说明", fromLegacy.Notes);
+        Assert.Null(fromLegacy.ArtifactSha256);
     }
 
     [Fact]

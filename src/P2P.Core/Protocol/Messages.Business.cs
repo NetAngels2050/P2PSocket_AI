@@ -33,7 +33,9 @@ public sealed record UpdateInfoRequest(
     [property: Key(1)] ulong TimestampMs,
     [property: Key(2)] byte MsgType) : IPcpMessage;
 
-/// <summary>0x03 S→C：最新版本号 + 协议兼容范围 [min, max] + 升级指引 URL/文本。</summary>
+/// <summary>0x03 S→C：最新版本号 + 协议兼容范围 [min, max] + 升级指引 URL/文本。
+/// 尾部可选字段 artifactSha256（v1.79/M5-14 落地，SEC-84/07 §14.4）：产物 SHA-256 清单
+/// JSON 字符串（{产物名→小写hex64}），升级页按平台取项展示；缺省/旧服务端=null=无清单。</summary>
 [MessagePackObject]
 public sealed record UpdateInfoResponse(
     [property: Key(0)] uint Seq,
@@ -43,7 +45,8 @@ public sealed record UpdateInfoResponse(
     [property: Key(4)] ushort MinProtocol,
     [property: Key(5)] ushort MaxProtocol,
     [property: Key(6)] string UpgradeUrl,
-    [property: Key(7)] string Notes) : IPcpMessage;
+    [property: Key(7)] string Notes,
+    [property: Key(8)] string? ArtifactSha256 = null) : IPcpMessage;
 
 // ── 0x13 设备改名（02 §2.4：本机管理类，passive 允许）────────────────────
 

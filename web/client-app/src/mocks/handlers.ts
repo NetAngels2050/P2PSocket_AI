@@ -69,7 +69,8 @@ export interface MockState {
   peers: Record<string, boolean>; // M2-23：deviceId → relayFallback
   conflict: { subnet: string; items: { kind: string; value: string; interface: string }[] } | null; // M3-13：网段冲突（null=无）
   logs: { ts: string; level: string; message: string }[]; // M2-27：演示日志（04 §2.6）
-  upgrade: { latestVersion: string; minProtocol: number; maxProtocol: number; upgradeUrl: string; notes: string };
+  upgrade: { latestVersion: string; minProtocol: number; maxProtocol: number; upgradeUrl: string; notes: string;
+    artifactSha256?: string | null }; // M5-14/SEC-84 尾部可选（空=未录入不展示）
   settings: {
     serverAddrs: string[];
     localWebPort: number;
@@ -195,6 +196,7 @@ export function createDefaultState(): MockState {
       maxProtocol: 1,
       upgradeUrl: "https://example.com/p2p-client-0.3.0.msi",
       notes: "演示态升级信息（M2-26 /api/upgrade/info）",
+      artifactSha256: "", // M5-14：默认未录入（演示态可覆写）
     },
     settings: {
       serverAddrs: ["127.0.0.1:7101"],

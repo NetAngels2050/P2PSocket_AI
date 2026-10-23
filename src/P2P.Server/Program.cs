@@ -123,6 +123,16 @@ if (OperatingSystem.IsLinux())
             File.SetUnixFileMode(f, UnixFileMode.UserRead | UnixFileMode.UserWrite);
 }
 
+// ── M5-14 升级链路（SEC-84、07 §14.4）：存量 http update_url 启动告警一次 ──
+//（管理页 PUT 已强制 https 拒收 http；此处仅针对存量值/外部改库——运行时屏蔽在
+//  ControlSession.SendUpdateInfoAsync：0x03 应答置空+notes 追加「管理员未配置有效升级地址」）
+{
+    using var warnDb = earlyFactory.CreateDbContext();
+    var url = new ServerConfigStore(warnDb).Get("update_url");
+    if (url.Length > 0 && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        Log.Warning("update_url 为非 https（{Url}，SEC-84 强制 https）：0x03 应答将置空屏蔽并提示，请在管理后台改为 https", url);
+}
+
 // ── 服务装配（01 §3.1；解析顺序见 ServerHostService）───────────────────
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(options);

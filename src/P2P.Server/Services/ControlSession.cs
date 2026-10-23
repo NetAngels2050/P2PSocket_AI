@@ -368,15 +368,26 @@ public sealed class ControlSession : IAsyncDisposable
     /// 0x03 升级信息应答（M2-14，FR-S-804/OQ-5、02 §7 冻结接口永不变更）：
     /// latestVersion/url/notes 出 server_config（update_* 键），maxProtocol=宿主编译协议版本
     /// （代码即真相），minProtocol 键配置并 clamp 进 [1, Current]。版本不符窗口与已建立会话共用。
+    /// M5-14（SEC-84、07 §14.4）：update_url 强制 https——非 https 的存量值运行时屏蔽
+    /// （置空下发+notes 追加「管理员未配置有效升级地址」；启动告警一次归 Program，管理页
+    /// PUT 已拒收 http）；尾部可选 artifactSha256=update_artifact_sha256 原样下发（空=未录入）。
     /// </summary>
     public async Task SendUpdateInfoAsync(CancellationToken ct = default)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
         var cfg = new ServerConfigStore(db);
         var min = Math.Clamp(cfg.GetInt("update_min_protocol"), 1, ProtocolVersion.Current);
+        var url = cfg.Get("update_url");
+        var notes = cfg.Get("update_notes");
+        if (url.Length > 0 && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            // 存量 http 值屏蔽（07 §14.4 定案：不拒启——运行时屏蔽已消除滥用面）
+            url = "";
+            notes = notes.Length == 0 ? "管理员未配置有效升级地址" : notes + "\n管理员未配置有效升级地址";
+        }
         await SendAsync(new UpdateInfoResponse(NextSeq(), NowMs64, MsgType.UpdateInfo,
             cfg.Get("update_latest_version"), (ushort)min, ProtocolVersion.Current,
-            cfg.Get("update_url"), cfg.Get("update_notes")), ct).ConfigureAwait(false);
+            url, notes, cfg.Get("update_artifact_sha256")), ct).ConfigureAwait(false);
     }
 
     // ── 发送（写队列串行化；Established 后签名）──────────────────────────

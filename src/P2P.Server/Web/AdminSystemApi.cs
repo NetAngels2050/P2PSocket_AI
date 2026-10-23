@@ -87,10 +87,12 @@ public sealed class AdminSystemApi(
         ["default_join_policy"] = (v => v is "free" or "approval", "须为 free|approval"),
         ["update_latest_version"] = (v => v.Trim().Length is >= 1 and <= 32, "须为非空版本号（≤32 字符）"),
         ["update_min_protocol"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 9999, "须为 1~9999"),
+        // M5-14/SEC-84 强制 https：http 一律拒收（存量值运行时屏蔽归 ControlSession，07 §14.4）
         ["update_url"] = (v => v.Length == 0
-            || (v.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                || v.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) && v.Length <= 500,
-            "须为空或 http(s):// 前缀地址（≤500 字符）"),
+            || v.StartsWith("https://", StringComparison.OrdinalIgnoreCase) && v.Length <= 500,
+            "须为空或 https:// 前缀地址（≤500 字符，http 拒收）"),
+        ["update_artifact_sha256"] = (v => v.Length == 0 || IsValidArtifactSha256(v),
+            "须为空或 JSON 对象（键 windows-setup/linux-tar/server-tar，值=小写 hex64）"),
         ["update_notes"] = (v => v.Length <= 500, "须 ≤500 字符"),
     };
 
@@ -211,5 +213,29 @@ public sealed class AdminSystemApi(
         var idx = value.LastIndexOf(':');
         return idx > 0 && IPAddress.TryParse(value[..idx], out _)
             && int.TryParse(value[(idx + 1)..], out var port) && port is >= 0 and <= 65535;
+    }
+
+    /// <summary>升级产物哈希清单形状（M5-14/SEC-84、07 §14.4）：JSON 对象，键 ⊆ 预定义产物名
+    /// （windows-setup/linux-tar/server-tar），值=小写 hex64；与 package.sh .sha256 清单同源。</summary>
+    private static bool IsValidArtifactSha256(string value)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(value);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return false;
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (prop.Name is not ("windows-setup" or "linux-tar" or "server-tar")) return false;
+                if (prop.Value.ValueKind != System.Text.Json.JsonValueKind.String) return false; // 值非字符串
+                var hash = prop.Value.GetString()!;
+                if (hash.Length != 64 || !hash.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'))
+                    return false; // 非 hex64（小写）
+            }
+            return true;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
     }

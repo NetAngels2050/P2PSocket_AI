@@ -14,7 +14,7 @@ const saving = ref("");
 
 /// 控件类型映射（与服务端 AdminSystemApi.Validators 白名单同键集；值校验在服务端，
 /// 前端控件只收敛输入形态）
-const KEY_META: Record<string, { label: string; type: "bool" | "select" | "number" | "text"; options?: string[] }> = {
+const KEY_META: Record<string, { label: string; type: "bool" | "select" | "number" | "text" | "textarea"; options?: string[] }> = {
   registration_open: { label: "开放注册", type: "bool" },
   relay_enabled: { label: "中继服务", type: "bool" },
   relay_rate_limit: { label: "中继限速（B/s）", type: "number" },
@@ -51,7 +51,8 @@ const KEY_META: Record<string, { label: string; type: "bool" | "select" | "numbe
   log_level: { label: "日志级别", type: "select", options: ["Trace", "Debug", "Information", "Warning", "Error", "Fatal"] },
   update_latest_version: { label: "升级-最新版本", type: "text" },
   update_min_protocol: { label: "升级-最低协议", type: "number" },
-  update_url: { label: "升级-下载地址", type: "text" },
+  update_url: { label: "升级-下载地址", type: "text" }, // M5-14/SEC-84：强制 https（http 拒收，即时生效）
+  update_artifact_sha256: { label: "升级-产物SHA-256", type: "textarea" }, // M5-14/SEC-84：JSON {产物名→小写hex64}，即时生效（0x03 现读）
   update_notes: { label: "升级-说明", type: "text" },
 };
 
@@ -186,6 +187,14 @@ onMounted(async () => {
               style="width: 160px"
               :data-testid="`system-number-${row.key}`"
               @change="(v: number | undefined) => v !== undefined && setDraft(row.key, String(v))"
+            />
+            <el-input
+              v-else-if="KEY_META[row.key]?.type === 'textarea'"
+              type="textarea"
+              :rows="3"
+              :model-value="draft(row.key)"
+              :data-testid="`system-textarea-${row.key}`"
+              @input="(v: string) => setDraft(row.key, v)"
             />
             <el-input
               v-else

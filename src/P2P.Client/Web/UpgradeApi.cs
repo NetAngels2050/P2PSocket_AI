@@ -37,13 +37,15 @@ public static class UpgradeApi
     }
 
     private static UpgradeInfoView ToView(UpdateInfoResponse info) =>
-        new(info.LatestVersion, info.MinProtocol, info.MaxProtocol, info.UpgradeUrl, info.Notes);
+        new(info.LatestVersion, info.MinProtocol, info.MaxProtocol, info.UpgradeUrl, info.Notes, info.ArtifactSha256);
 }
 
-/// <summary>升级信息展示 DTO（04 §2.7：版本/兼容范围/指引；export-ts 导出）。</summary>
+/// <summary>升级信息展示 DTO（04 §2.7：版本/兼容范围/指引；export-ts 导出）。
+/// 尾部可选 artifactSha256（M5-14/SEC-84）：产物 SHA-256 清单 JSON 字符串，null/空=未录入不展示。</summary>
 public sealed record UpgradeInfoView(
     string LatestVersion,
     ushort MinProtocol,
     ushort MaxProtocol,
     string UpgradeUrl,
-    string Notes);
+    string Notes,
+    string? ArtifactSha256 = null);

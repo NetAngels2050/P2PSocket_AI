@@ -56,7 +56,8 @@ public static class DbInitializer
         // 0x03 升级信息（M2-14，FR-S-804/OQ-5）：latest/min/url/notes 出配置，max=宿主编译协议版本
         ("update_latest_version", "0.1.0"),
         ("update_min_protocol", "1"),
-        ("update_url", ""),
+        ("update_url", ""),           // M5-14/SEC-84：强制 https（PUT 拒 http；存量 http 运行时屏蔽，07 §14.4）
+        ("update_artifact_sha256", ""), // M5-14/SEC-84：产物哈希清单 JSON {产物名→小写hex64}（0x03 现读下发）
         ("update_notes", ""),
     ];
 

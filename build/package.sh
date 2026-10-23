@@ -33,6 +33,30 @@ publish() { # $1=项目路径 $2=RID $3=产物目录名
 archive() { # $1=产物目录名（Linux 分发形态 tar.gz；分发名前缀 P2PSocket-，2026-10-21 命名口径）
   echo "==> 归档 out/$1 → out/P2PSocket-$1-v$VERSION.tar.gz"
   tar -czf "out/P2PSocket-$1-v$VERSION.tar.gz" -C "out/$1" .
+  sha256_manifest "out/P2PSocket-$1-v$VERSION.tar.gz"
+}
+
+# M5-14/SEC-84（07 §14.4）产物哈希清单：每分发件一份 <文件名>.sha256，内容单行
+#   「<小写hex64>␣␣<产物文件名>」（两空格=GNU sha256sum 文本模式口径，sha256sum -c 直接核验）。
+sha256_manifest() { # $1=分发件路径（out/ 下）
+  local f name
+  f="$1"; name=$(basename "$f")
+  echo "==> SHA-256 清单 $f.sha256"
+  (cd out && sha256sum "$name" > "$name.sha256")
+}
+
+# 全产物汇总 SHA256SUMS（同格式多行）：按本次在位分发件全量重建（幂等；单目标运行不重复登记）
+write_sums() {
+  : > out/SHA256SUMS
+  for f in out/P2PSocket-*.tar.gz out/P2PSocket-Client-Setup-*.exe; do
+    [ -f "$f" ] || continue
+    [ -f "$f.sha256" ] || sha256_manifest "$f"
+    cat "$f.sha256" >> out/SHA256SUMS
+  done
+  if [ -s out/SHA256SUMS ]; then
+    echo "==> 汇总清单 out/SHA256SUMS（$(wc -l < out/SHA256SUMS) 条）"
+    STATUS="$STATUS SHA256SUMS"
+  fi
 }
 
 want() { echo "$TARGET" | grep -qw "$1"; } # all 含全部目标
@@ -75,6 +99,7 @@ run_win_setup() { # M4-02：Inno Setup 安装包（依赖 client-win 产物；IS
     "$ISCC" //DPkgVersion="$VERSION" deploy/client/win/P2PSocket-Client.iss || { echo "ISCC 编译失败"; exit 1; }
     test -f "out/P2PSocket-Client-Setup-$VERSION-x64.exe" \
       || { echo "产物校验失败：out/P2PSocket-Client-Setup-$VERSION-x64.exe 缺失"; exit 1; }
+    sha256_manifest "out/P2PSocket-Client-Setup-$VERSION-x64.exe"
     STATUS="$STATUS win-setup(v$VERSION)"
   else
     echo "警告：ISCC.exe 不存在（Inno Setup 6 未安装，winget install JRSoftware.InnoSetup）——"
@@ -91,5 +116,7 @@ case "$TARGET" in
   all) run_client_win; run_client_linux; run_server ;;
   *) echo "未知目标：$TARGET（支持 client-win|client-linux|server|win-setup|all）"; exit 1 ;;
 esac
+
+write_sums # M5-14：分发件 .sha256 齐备后汇总（无分发件目标=空文件不报）
 
 echo "==> 打包完成：$STATUS"

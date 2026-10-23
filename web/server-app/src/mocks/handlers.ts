@@ -230,6 +230,7 @@ const CONFIG_DEFAULTS: Record<string, string> = {
   update_latest_version: "0.1.0",
   update_min_protocol: "1",
   update_url: "",
+  update_artifact_sha256: "", // M5-14/SEC-84：产物哈希清单 JSON（空=未录入）
   update_notes: "",
 };
 
