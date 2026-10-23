@@ -1,0 +1,29 @@
+# M5-11 服务端最小权限部署单元（SEC-81、NFR-63、07 §14.1、08 §2④）。
+# 专用非特权账户 p2p + systemd 沙箱：3478<1024 为唯一特权点——AmbientCapabilities 授权非特权
+# 绑定、CapabilityBoundingSet 收敛至该项；ProtectSystem=strict 全文件系统只读，仅
+# ReadWritePaths 白名单（data/logs）可写。首装/存量 root 迁移/回退步骤见
+# docs/deploy/服务端部署手册.md §2.1/§2.8。
+[Unit]
+Description=P2P Server (control/STUN/relay/web)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=p2p
+Group=p2p
+WorkingDirectory=/opt/p2p/server
+ExecStart=/opt/p2p/server/p2p-server
+Restart=always
+RestartSec=5
+# —— M5-11 沙箱（07 §14.1）——
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/p2p/server/data /opt/p2p/server/logs
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

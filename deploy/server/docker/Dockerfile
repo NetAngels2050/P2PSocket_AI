@@ -7,6 +7,11 @@
 #   回环前缀映射 "127.0.0.1:7500:7500" 保持管理面不对公网监听（双保险不破）。
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0
 
+# M5-11 最小权限（SEC-81、07 §14.1、08 §2③）：USER 非 root（固定 uid 1000 p2p）；
+# 3478<1024 依赖容器 cap 集（Docker 默认含 NET_BIND_SERVICE），环境裁剪 cap 时
+#   须 --cap-add=NET_BIND_SERVICE；/data 卷属主须 p2p（宿主侧 chown 1000，见 README/compose 注）。
+RUN groupadd -g 1000 p2p && useradd -r -u 1000 -g p2p -s /usr/sbin/nologin p2p
+
 WORKDIR /app
 
 # 产物全量（p2p-server 单文件+wwwroot/+staticwebassets.endpoints.json+libe_sqlite3.so+appsettings.json）
@@ -26,6 +31,9 @@ ENV listen__webBind=0.0.0.0 \
 # 端口集（03 §5.1/08 §5.1）：控制 7000/STUN 3478 tcp+udp/中继 7010-7020 tcp+udp/管理 7500
 # EXPOSE 为文档声明；实际发布由 run/compose -p 决定（7500 必须 127.0.0.1 前缀映射，见 compose）
 EXPOSE 7000 3478/tcp 3478/udp 7010-7020/tcp 7010-7020/udp 7500
+
+# 非 root 运行（M5-11；HEALTHCHECK 同身份执行——bash /dev/tcp 探测无特权要求）
+USER p2p
 
 # 健康检查（runtime-deps 无 curl/wget：bash /dev/tcp 探 TCP 7000 控制面）
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

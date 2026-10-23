@@ -1,9 +1,14 @@
-# P2P 服务端 Docker 部署（M4-04，NFR-34、08 §3.3）
+# P2P 服务端 Docker 部署（M4-04，NFR-34、08 §3.3；M5-11 非 root 化）
 
 镜像基于 `mcr.microsoft.com/dotnet/runtime-deps:10.0`（自包含单文件无需 SDK/Runtime 镜像），
 程序全量在 `/app`（无状态），数据全在 `/data` 卷（SQLite `p2p.db` + WAL + server_config 业务键
 `public_addr`/`stun_alt_addr`/`relay_*` 等 + 滚动日志 `/data/logs/`——镜像内 `/app/logs` 符号链接进卷，
 08 §3.3"卷：/data（p2p.db+日志）"；迁移=搬卷）。
+
+**M5-11 最小权限（SEC-81、07 §14.1）**：镜像 `USER p2p`（固定 uid 1000）非 root 运行；
+3478 低端口绑定依赖容器 cap 集（Docker 默认 cap 含 NET_BIND_SERVICE）——若环境裁剪了 cap
+须 `--cap-add=NET_BIND_SERVICE`；**`/data` 卷属主必须为 uid 1000**（见 §2 首启前一次性 chown；
+root 属主旧卷直接换新镜像=库文件打不开起不来）。
 
 ## 1. 构建
 
@@ -19,10 +24,13 @@ docker build -f deploy/server/docker/Dockerfile -t p2p-server:1.0.0 out/server
 ## 2. 启动（compose）
 
 ```sh
+# M5-11：卷属主对齐镜像 uid 1000（既有 root 属主卷须一次性执行；新建目录可跳过）
+sudo chown -R 1000:1000 ./data
 cd deploy/server/docker
 docker compose up -d
 docker compose ps                 # healthy（TCP 7000 健康检查 ~30s 起）
 docker logs p2p-server | head     # 首行「数据库就绪」
+docker exec p2p-server id         # uid=1000(p2p)——非 root 运行核对（M5-11）
 ```
 
 管理面：`http://127.0.0.1:7500`（宿主回环——compose 回环前缀映射，D11）；

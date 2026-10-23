@@ -18,7 +18,10 @@ services:
       # 宿主侧回环前缀映射=仅宿主本机可达；跨机管理走 SSH 隧道/客户端映射（过渡期口径同 M3-18）
       - "127.0.0.1:7500:7500"
     volumes:
-      - ./data:/data                   # 数据库+日志（p2p.db+server_config 业务键+logs/——镜像内 /app/logs 符号链接进卷）
+      # 数据库+日志（p2p.db+server_config 业务键+logs/——镜像内 /app/logs 符号链接进卷）。
+      # M5-11 镜像 USER 非 root（uid 1000 p2p）：宿主卷属主须一致，首次启用前一次性
+      #   sudo chown -R 1000:1000 ./data （root 属主旧卷直接换镜像=库文件打不开起不来）
+      - ./data:/data
     # healthcheck 继承 Dockerfile（TCP 7000 bash /dev/tcp）；如需覆盖：
     # healthcheck:
     #   test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7000"]
