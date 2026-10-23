@@ -2,8 +2,11 @@
 ; 2026-10-21 命名口径修订（用户指令）：显示名/产物名统一 P2PSocket 品牌——AppName=P2PSocket 客户端、
 ;   Setup 产物 P2PSocket-Client-Setup-{ver}-x64.exe、安装目录 {autopf}\P2PSocketClient、开始菜单组
 ;   「P2PSocket 客户端」、服务显示名 P2PSocket 客户端。**服务名 P2PClient 与数据目录
-;   %ProgramData%\P2PClient 刻意不动**——已装机覆盖升级与数据保留依赖二者（AppId 不变=同应用，
-;   升级沿用旧安装目录）。
+;   %ProgramData%\P2PClient 刻意不动**——已装机覆盖升级与数据保留依赖二者（AppId 不变=同应用）。
+; 目录选择（2026-10-24 用户裁定）：**升级也显示目录选择页**，默认=上次安装位置（读卸载键
+;   InstallLocation；无旧安装= {autopf}\P2PSocketClient）——实现=UsePreviousAppDir=no（关掉
+;   「静默复用旧目录+跳页」默认行为）+ DefaultDirName={code:GetDefaultDir}。注意：升级时若
+;   改选新目录，旧目录文件 Inno 不迁移不清理（数据目录 %ProgramData% 不受影响，服务重指新路径）。
 ; 编译：ISCC /DPkgVersion=1.0.0 deploy\client\win\P2PSocket-Client.iss（package.sh win-setup 目标自动传版本）
 ;   —— 版本单一事实源=src/Directory.Build.props（package.sh 提取经 /D 传入；直跑 ISCC 用下方 #ifndef 兜底）
 ; 产物：out/P2PSocket-Client-Setup-{ver}-x64.exe
@@ -28,7 +31,9 @@ AppId={{D2762F4B-9E8A-4C71-9A05-7B3E1D4F5A68}
 AppName=P2PSocket 客户端
 AppVersion={#PkgVersion}
 AppPublisher=P2PSocket_AI
-DefaultDirName={autopf}\P2PSocketClient
+; UsePreviousAppDir=no + 代码默认值：升级仍显示目录选择页且默认上次位置（见头部注记）
+UsePreviousAppDir=no
+DefaultDirName={code:GetDefaultDir}
 DisableProgramGroupPage=yes
 OutputDir=..\..\..\out
 OutputBaseFilename=P2PSocket-Client-Setup-{#PkgVersion}-x64
@@ -57,6 +62,24 @@ Name: "{autoprograms}\P2PSocket 客户端\Web 管理页"; Filename: "http://127.
 [Code]
 const
   ServiceName = 'P2PClient';
+  UninstKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{D2762F4B-9E8A-4C71-9A05-7B3E1D4F5A68}_is1';
+
+/// 目录选择页默认值（2026-10-24）：上次安装位置（卸载键 InstallLocation），无旧安装=程序文件默认。
+/// 配合 UsePreviousAppDir=no——升级仍可改目录（Inno 默认行为是静默复用旧目录并跳过选择页）。
+function GetDefaultDir(Param: String): String;
+var
+  Prev: String;
+begin
+  Result := ExpandConstant('{autopf}\P2PSocketClient');
+  if RegQueryStringValue(HKLM, UninstKey, 'InstallLocation', Prev) and (Prev <> '') then
+  begin
+    // InstallLocation 带尾反斜杠（如 C:\Program Files\P2PSocketClient\）——去掉避免目录页显示双斜杠
+    while (Length(Prev) > 3) and (Copy(Prev, Length(Prev), 1) = '\') do
+      Delete(Prev, Length(Prev), 1);
+    if DirExists(Prev) then
+      Result := Prev;
+  end;
+end;
 
 // ── 服务操作（sc.exe 命令行，与 install-windows-service.ps1 同参数源）──────────────
 
