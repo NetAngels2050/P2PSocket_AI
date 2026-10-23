@@ -12,6 +12,11 @@ public sealed class ClientSettings
     /// <summary>本地 Web 端口（默认 7100）。</summary>
     public int LocalWebPort { get; set; } = 7100;
 
+    /// <summary>本地 Web token 鉴权开关（SEC-82/M5-12，默认 true）——false=本地 API/WS 免鉴权
+    /// （07 §14.2 可配置化：2026-10-24 用户裁定易用性优先，关闭后页面无需 token 即可用；
+    /// 中间件启动期装配，变更重启生效）。</summary>
+    public bool WebTokenAuth { get; set; } = true;
+
     /// <summary>打洞并发数（1~5，OQ-1 决议，默认 3）。</summary>
     public int PunchConcurrency { get; set; } = 3;
 

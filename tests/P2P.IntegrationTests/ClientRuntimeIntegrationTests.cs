@@ -240,6 +240,43 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         await runtime2.DisposeAsync();
     }
 
+    // ── ①c M5-12 可配置化（07 §14.2，2026-10-24 用户裁定）：webTokenAuth 默认开 → 裸 HTTP 401；
+    //     关闭 → 同一目录重启后本地 API 免 token 可用 ──
+
+    [Fact]
+    public async Task 本地Web鉴权开关_默认开裸请求401_关闭后免token可用()
+    {
+        await SeedRegisteredWithMappingAsync("rt-auth", null);
+        var dir = Path.Combine(_rootDir, "rt-auth");
+
+        // 默认（webTokenAuth=true）：不带 Bearer 的裸请求被中间件拒（401+envelope{2001}）
+        var runtime1 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic });
+        await runtime1.StartAsync();
+        using (var bare = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime1.WebPort}") })
+        using (var denied = await bare.GetAsync("/api/system/state"))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+            var root = JsonDocument.Parse(await denied.Content.ReadAsStringAsync()).RootElement;
+            Assert.Equal((int)ErrorCode.Unauthorized, root.GetProperty("code").GetInt32());
+        }
+        await runtime1.DisposeAsync();
+
+        // 关闸（settings 落盘）→ 重启：同一裸请求 200（中间件未装配）
+        var store = new SettingsStore(dir);
+        store.Load();
+        var off = store.Settings;
+        off.WebTokenAuth = false;
+        await store.SaveAsync(off);
+
+        var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic });
+        await runtime2.StartAsync();
+        using (var bare = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime2.WebPort}") })
+        {
+            Assert.Equal("running", await GetPhaseAsync(bare)); // 免 token 直用
+        }
+        await runtime2.DisposeAsync();
+    }
+
     private static async Task WaitStateAsync(HttpClient http, string state)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));

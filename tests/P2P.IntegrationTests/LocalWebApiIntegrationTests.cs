@@ -676,6 +676,16 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
         var port = await PutAsync(stack, "/api/settings", new { localWebPort = 7200 });
         Assert.Equal(ErrorCode.Ok, port.code);
         Assert.True(port.data!.Value.GetProperty("restartRequired").GetBoolean());
+
+        // M5-12 可配置化（07 §14.2）：webTokenAuth 默认 true 透出 + 关闭 → restartRequired=true（中间件启动期装配）+ 落盘可复读
+        Assert.True(before.data.Value.GetProperty("webTokenAuth").GetBoolean());
+        var authOff = await PutAsync(stack, "/api/settings", new { webTokenAuth = false });
+        Assert.Equal(ErrorCode.Ok, authOff.code);
+        Assert.True(authOff.data!.Value.GetProperty("restartRequired").GetBoolean());
+        Assert.False(authOff.data.Value.GetProperty("settings").GetProperty("webTokenAuth").GetBoolean());
+        var reread3 = new SettingsStore(Path.GetDirectoryName(stack.Settings.SettingsFilePath)!);
+        reread3.Load();
+        Assert.False(reread3.Settings.WebTokenAuth);
     }
 
     // ── ⑥ WS login_state：登录/登出推送 ─────────────────────────────

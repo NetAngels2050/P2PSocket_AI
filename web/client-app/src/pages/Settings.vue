@@ -25,6 +25,8 @@ const system = useSystemStore();
 const addrs = ref<string[]>([]);
 const punchConcurrency = ref(3);
 const localWebPort = ref(7100);
+/** M5-12 可配置化（07 §14.2）：本地 Web token 鉴权开关——关=页面免 token 可用（重启生效） */
+const webTokenAuth = ref(true);
 const busy = ref(false);
 /** 提交后置位：localWebPort 变更须重启本地服务才生效（监听端口绑定时机） */
 const restartHint = ref(false);
@@ -86,9 +88,10 @@ async function save() {
       serverAddrs: addrs.value,
       punchConcurrency: punchConcurrency.value,
       localWebPort: localWebPort.value,
+      webTokenAuth: webTokenAuth.value,
     });
     restartHint.value = result.restartRequired;
-    if (result.restartRequired) ElMessage.warning("本地 Web 端口已变更：重启客户端后生效");
+    if (result.restartRequired) ElMessage.warning("本地 Web 端口或鉴权开关已变更：重启客户端后生效");
     else ElMessage.success("设置已保存（即时生效）");
   } catch (e) {
     ElMessage.error(e instanceof ApiError ? e.message : "保存失败");
@@ -104,6 +107,7 @@ onMounted(async () => {
     addrs.value = [...s.serverAddrs];
     punchConcurrency.value = s.punchConcurrency;
     localWebPort.value = s.localWebPort;
+    webTokenAuth.value = s.webTokenAuth;
   }
   void refreshPunchQueue(); // 诊断工具区初值（M3-14；失败静默，点刷新重试）
   void refreshTunnels();
@@ -355,6 +359,17 @@ async function triggerRekey(t: TunnelView) {
         </div>
       </el-form-item>
 
+      <!-- 本地 Web token 鉴权（M5-12 可配置化） -->
+      <el-form-item label="页面鉴权">
+        <el-switch
+          v-model="webTokenAuth"
+          data-testid="settings-webtoken-auth"
+        />
+        <div class="hint">
+          开=本地页面/API 须携带随服务启动轮换的 token（默认，更安全）；关=免鉴权直接访问（重启客户端生效）——关闭后任何本机程序也可驱动本地服务，仅在信任的本机环境使用
+        </div>
+      </el-form-item>
+
       <el-form-item>
         <el-button
           type="primary"
@@ -372,7 +387,7 @@ async function triggerRekey(t: TunnelView) {
       v-if="restartHint"
       type="warning"
       :closable="false"
-      title="本地 Web 端口已变更——重启客户端后新端口生效（当前仍由旧端口服务）"
+      title="本地 Web 端口或鉴权开关已变更——重启客户端后生效（当前仍按旧配置服务）"
       data-testid="settings-restart-hint"
     />
 

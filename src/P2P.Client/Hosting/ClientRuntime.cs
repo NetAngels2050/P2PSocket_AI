@@ -211,7 +211,8 @@ public sealed class ClientRuntime : IAsyncDisposable
         builder.WebHost.UseUrls($"http://127.0.0.1:{WebPort}"); // TD-12 仅本机回环
         _app = builder.Build();
         _app.UseWebSockets();
-        _app.UseWebTokenAuth(_webToken.Value); // M5-12：/api/* 与 /ws/status 校验、静态豁免（07 §14.2）
+        if (_settings.Settings.WebTokenAuth) // M5-12：/api/* 与 /ws/status 校验（07 §14.2）——webTokenAuth=false 免鉴权（可配置化，重启生效）
+            _app.UseWebTokenAuth(_webToken.Value);
         _app.MapLocalApi(_api);
         // SPA 同端口静态托管（04 §0「SPA 由同端口静态托管」、08 §2 NFR-31）：wwwroot 经
         // MapStaticAssets 服务（读 staticwebassets.endpoints.json，含 .br/.gz 预压缩直发）；

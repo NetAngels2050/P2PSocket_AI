@@ -28,6 +28,7 @@ public static class SettingsApi
                     LocalWebPort = body.LocalWebPort ?? current.LocalWebPort,
                     PunchConcurrency = body.PunchConcurrency ?? current.PunchConcurrency,
                     KeepaliveSec = body.KeepaliveSec ?? current.KeepaliveSec,
+                    WebTokenAuth = body.WebTokenAuth ?? current.WebTokenAuth, // M5-12 可配置化（07 §14.2）
                     Reconnect = current.Reconnect,
                 };
                 await settings.SaveAsync(merged, ct); // 校验失败抛 ConfigValidationException → 1001 带字段明细
@@ -38,7 +39,8 @@ public static class SettingsApi
 
                 return Api.Ok(new
                 {
-                    restartRequired = merged.LocalWebPort != current.LocalWebPort,
+                    restartRequired = merged.LocalWebPort != current.LocalWebPort ||
+                                      merged.WebTokenAuth != current.WebTokenAuth, // 鉴权中间件启动期装配（04 §2.1）
                     serverAddrsChanged,
                     settings = View(merged),
                 });
@@ -53,6 +55,7 @@ public static class SettingsApi
     {
         s.ServerAddrs,
         s.LocalWebPort,
+        s.WebTokenAuth,
         s.PunchConcurrency,
         s.KeepaliveSec,
         s.Reconnect,
@@ -60,5 +63,5 @@ public static class SettingsApi
 
     /// <summary>部分更新体（null=保持现值；04 §2.1）。</summary>
     public sealed record SettingsUpdateRequest(
-        string[]? ServerAddrs, int? LocalWebPort, int? PunchConcurrency, int? KeepaliveSec);
+        string[]? ServerAddrs, int? LocalWebPort, int? PunchConcurrency, int? KeepaliveSec, bool? WebTokenAuth);
 }

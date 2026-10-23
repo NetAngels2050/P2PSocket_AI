@@ -74,6 +74,7 @@ export interface MockState {
   settings: {
     serverAddrs: string[];
     localWebPort: number;
+    webTokenAuth: boolean; // M5-12 可配置化（07 §14.2）：默认开；关=免鉴权（重启生效）
     punchConcurrency: number;
     keepaliveSec: number;
     reconnect: { minSec: number; maxSec: number };
@@ -201,6 +202,7 @@ export function createDefaultState(): MockState {
     settings: {
       serverAddrs: ["127.0.0.1:7101"],
       localWebPort: 7100,
+      webTokenAuth: true, // M5-12 可配置化默认值
       punchConcurrency: 3,
       keepaliveSec: 20,
       reconnect: { minSec: 1, maxSec: 30 },
@@ -485,10 +487,15 @@ export function createHandlers(state: MockState = createDefaultState()) {
       if (body.punchConcurrency !== undefined &&
         (body.punchConcurrency < 1 || body.punchConcurrency > 5))
         return fail(1001, "punch_concurrency_out_of_range");
-      const before = { port: state.settings.localWebPort, addrs: state.settings.serverAddrs };
+      const before = {
+        port: state.settings.localWebPort,
+        auth: state.settings.webTokenAuth,
+        addrs: state.settings.serverAddrs,
+      };
       Object.assign(state.settings, body);
       return ok({
-        restartRequired: state.settings.localWebPort !== before.port,
+        restartRequired: state.settings.localWebPort !== before.port ||
+          state.settings.webTokenAuth !== before.auth, // 中间件启动期装配（04 §2.1）
         serverAddrsChanged:
           JSON.stringify(state.settings.serverAddrs) !== JSON.stringify(before.addrs),
         settings: state.settings,
