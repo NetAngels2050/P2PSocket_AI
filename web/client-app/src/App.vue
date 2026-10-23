@@ -13,6 +13,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { Odometer, Search, Share, Connection, Link, Document, User, Setting, Upload, InfoFilled } from "@element-plus/icons-vue";
 import { AdminLayout, useWs, ApiPaths } from "@p2p/ui-shared";
+import { buildWsUrl } from "./api";
 import { useSystemStore } from "./stores/system";
 import { useAuthStore } from "./stores/auth";
 import { useMappingStore } from "./stores/mappings";
@@ -42,7 +43,7 @@ const devices = useDeviceStore();
 const route = useRoute();
 const router = useRouter();
 
-const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${ApiPaths.WsStatus}`;
+const wsUrl = buildWsUrl(ApiPaths.WsStatus); // M5-12：query token 注入（07 §14.2）
 
 const { connected } = useWs({
   url: wsUrl,

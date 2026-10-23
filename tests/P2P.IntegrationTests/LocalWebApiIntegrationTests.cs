@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
@@ -238,6 +239,7 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
         public WebApplication App = null!;
         public HttpClient Http = null!;
         public string WsUrl = null!;
+        public string WebToken = null!; // M5-12：现值（07 §14.2 轮换用例断言面）
         public string LogsDir = null!;
 
         public async ValueTask DisposeAsync()
@@ -252,11 +254,12 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
         }
     }
 
-    /// <summary>建栈：seed=true 时用已种设备登录 admin（L2 可见）；false 为全新未注册态（向导路径）。</summary>
+    /// <summary>建栈：seed=true 时用已种设备登录 admin（L2 可见）；false 为全新未注册态（向导路径）。
+    /// dirOverride（M5-12）：复用既有目录驱动重启轮换用例。</summary>
     private async Task<ClientStack> StartStackAsync(
-        (Guid DeviceId, byte[] DeviceSecret, string RemoteCode)? seed = null)
+        (Guid DeviceId, byte[] DeviceSecret, string RemoteCode)? seed = null, string? dirOverride = null)
     {
-        var dir = Path.Combine(_rootDir, $"s{Guid.NewGuid():N}");
+        var dir = dirOverride ?? Path.Combine(_rootDir, $"s{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         var stack = new ClientStack();
         stack.Control = new ControlClient(
@@ -292,15 +295,20 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
             peers, stack.Wizard, sync, stack.Scheduler, lanSegments, stack.LogsDir);
 
         var webPort = FreePort();
+        var webToken = new WebToken(dir); // M5-12：本地 Web token（07 §14.2，与生产同法生成）
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls($"http://127.0.0.1:{webPort}");
         var app = builder.Build();
         app.UseWebSockets();
+        app.UseWebTokenAuth(webToken.Value); // M5-12：/api/* 与 /ws/status 校验、静态豁免（07 §14.2）
         app.MapLocalApi(stack.Api);
         await app.StartAsync();
         stack.App = app;
         stack.Http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{webPort}") };
-        stack.WsUrl = $"ws://127.0.0.1:{webPort}/ws/status";
+        // M5-12：夹具默认客户端带 Bearer——与前端 sessionStorage 注入同构（query 供 WS）
+        stack.Http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", webToken.Value);
+        stack.WsUrl = $"ws://127.0.0.1:{webPort}/ws/status?token={webToken.Value}"; // M5-12：query 载体（07 §14.2）
+        stack.WebToken = webToken.Value;
         return stack;
     }
 
@@ -1129,6 +1137,51 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
             new { username, password = "secret123" })).code);
         Assert.Equal(ErrorCode.Ok, (await PostAsync(stack, "/api/auth/login",
             new { username, password = "newpass456" })).code);
+    }
+
+    // ── M5-12 本地 Web token 鉴权（07 §14.2：无 token 拒/有 token 过/重启轮换旧值拒）──
+
+    /// <summary>裸 HTTP（无 Authorization/query）：401 + envelope{2001}——本机任意进程
+    /// 无法再不经凭据驱使本地 API（A-18 后半）。</summary>
+    [Fact]
+    public async Task Token_无token裸HTTP被拒_401带2001()
+    {
+        await using var stack = await StartStackAsync();
+        using var bare = new HttpClient { BaseAddress = stack.Http.BaseAddress! };
+        using var resp = await bare.GetAsync("/api/system/state");
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
+        var env = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal(ErrorCode.Unauthorized, env.GetProperty("code").GetInt32());
+    }
+
+    /// <summary>WS 升级无 token（剥 query）：握手被拒——query 是浏览器 WS 唯一载体（07 §14.2）。</summary>
+    [Fact]
+    public async Task Token_WS升级无token被拒()
+    {
+        await using var stack = await StartStackAsync();
+        using var ws = new ClientWebSocket();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await Assert.ThrowsAnyAsync<WebSocketException>(
+            () => ws.ConnectAsync(new Uri(stack.WsUrl.Split('?')[0]), cts.Token));
+    }
+
+    /// <summary>重启轮换：同目录二次启动发新 token，旧文件值 401、现值 200（07 §14.2 随服务重启轮换）。</summary>
+    [Fact]
+    public async Task Token_重启轮换_旧token拒_新token通()
+    {
+        var dir = Path.Combine(_rootDir, $"s{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var oldToken = new WebToken(dir).Value; // 上一实例遗留文件值（重启轮换断点）
+        await using var stack = await StartStackAsync(dirOverride: dir);
+        Assert.NotEqual(oldToken, stack.WebToken);
+
+        using var old = new HttpClient { BaseAddress = stack.Http.BaseAddress! };
+        old.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", oldToken);
+        using var oldResp = await old.GetAsync("/api/system/state");
+        Assert.Equal(HttpStatusCode.Unauthorized, oldResp.StatusCode); // 旧值已失效
+
+        using var now = await stack.Http.GetAsync("/api/system/state");
+        Assert.Equal(HttpStatusCode.OK, now.StatusCode); // 现值通（夹具带 Bearer）
     }
 }
 

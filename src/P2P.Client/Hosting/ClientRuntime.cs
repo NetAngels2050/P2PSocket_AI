@@ -92,6 +92,7 @@ public sealed class ClientRuntime : IAsyncDisposable
     private DevicePinger _devicePinger = null!;
     private LocalApiServices _api = null!;
     private WebApplication _app = null!;
+    private WebToken _webToken = null!; // M5-12：本地 Web token（07 §14.2，随启动轮换）
     private NicHealthMonitor? _nicMonitor;
     private Task? _relayRetryLoop;
     private readonly SemaphoreSlim _restoreMutex = new(1, 1); // 启用映射恢复重入闸（启动与登录补发并发防扰）
@@ -111,6 +112,9 @@ public sealed class ClientRuntime : IAsyncDisposable
 
     /// <summary>本地 Web 实际监听端口（settings.localWebPort）。</summary>
     public int WebPort { get; private set; }
+
+    /// <summary>本地 Web token 现值（M5-12，07 §14.2）：in-proc 诊断/集成注入用；随启动轮换。</summary>
+    public string WebToken => _webToken.Value;
 
     public ClientRuntime(ClientRuntimeOptions? options = null) => _options = options ?? new ClientRuntimeOptions();
 
@@ -202,10 +206,12 @@ public sealed class ClientRuntime : IAsyncDisposable
 
         // ③ 本地 Web（两种分支都启：向导也经它完成注册）
         WebPort = _settings.Settings.LocalWebPort;
+        _webToken = new WebToken(_options.BaseDir); // M5-12：每次启动生成（重启即轮换，07 §14.2）
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls($"http://127.0.0.1:{WebPort}"); // TD-12 仅本机回环
         _app = builder.Build();
         _app.UseWebSockets();
+        _app.UseWebTokenAuth(_webToken.Value); // M5-12：/api/* 与 /ws/status 校验、静态豁免（07 §14.2）
         _app.MapLocalApi(_api);
         // SPA 同端口静态托管（04 §0「SPA 由同端口静态托管」、08 §2 NFR-31）：wwwroot 经
         // MapStaticAssets 服务（读 staticwebassets.endpoints.json，含 .br/.gz 预压缩直发）；
@@ -225,7 +231,7 @@ public sealed class ClientRuntime : IAsyncDisposable
         // ④ 分支：未注册 → 向导模式等待；已注册 → 注册后路径（Nic→通道→映射恢复）
         if (!_state.State.IsRegistered)
         {
-            var url = ClientRegistrationService.WizardUrl(WebPort);
+            var url = ClientRegistrationService.WizardUrl(WebPort, _webToken.Value); // M5-12：自动打开携带 token（07 §14.2）
             Log?.Invoke($"未注册：向导模式已就绪 {url}（等待用户完成注册，FR-C-101）");
             if (_options.Interactive) TryOpenBrowser(url);
             _wizard.RegistrationCompleted += result =>
@@ -250,7 +256,7 @@ public sealed class ClientRuntime : IAsyncDisposable
                     + $"指引 {info.UpgradeUrl}（FR-C-904）");
         UpgradeRequired?.Invoke(info);
         if (_options.Interactive && Interlocked.Exchange(ref _upgradeBrowserOpened, 1) == 0)
-            TryOpenBrowser($"http://127.0.0.1:{_settings.Settings.LocalWebPort}/upgrade?reason=version");
+            TryOpenBrowser($"http://127.0.0.1:{_settings.Settings.LocalWebPort}/upgrade?reason=version&token={_webToken.Value}"); // M5-12：携带 token（07 §14.2）
     }
 
     /// <summary>注册后路径（01 §4.1：Nic → Established → 恢复启用映射）。幂等（向导完成事件与已注册启动共用）。</summary>

@@ -51,8 +51,10 @@ public sealed class ClientRegistrationService(
     /// <summary>未注册态探测（FR-C-101：state 三要素不完整 → 首启向导）。</summary>
     public static bool NeedsWizard(ClientState state) => !state.IsRegistered;
 
-    /// <summary>向导引导 URL（FR-C-101：127.0.0.1 本地 Web；Linux 无桌面时终端打印同此）。</summary>
-    public static string WizardUrl(int localWebPort) => $"http://127.0.0.1:{localWebPort}/wizard";
+    /// <summary>向导引导 URL（FR-C-101：127.0.0.1 本地 Web；Linux 无桌面时终端打印同此）。
+    /// M5-12：token 可选参——自动打开 URL 携带 token 免手工输入（07 §14.2）。</summary>
+    public static string WizardUrl(int localWebPort, string? token = null)
+        => $"http://127.0.0.1:{localWebPort}/wizard" + (token is null ? "" : $"?token={token}");
 
     /// <summary>向导第一步：服务端连通性探测（顺序同 serverAddrs；返回首个可达项或全部失败明细）。</summary>
     public static async Task<(bool Ok, string Detail)> TestConnectivityAsync(

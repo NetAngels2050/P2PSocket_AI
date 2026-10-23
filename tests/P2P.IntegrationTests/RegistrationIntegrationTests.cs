@@ -203,6 +203,8 @@ public sealed class RegistrationIntegrationTests : IAsyncLifetime
     public void 向导URL_本地回环()
     {
         Assert.Equal("http://127.0.0.1:7100/wizard", ClientRegistrationService.WizardUrl(7100));
+        // M5-12：自动打开携带 token 免手工输入（07 §14.2）
+        Assert.Equal("http://127.0.0.1:7100/wizard?token=abc", ClientRegistrationService.WizardUrl(7100, "abc"));
     }
 }
 

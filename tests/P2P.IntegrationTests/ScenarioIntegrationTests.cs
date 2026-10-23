@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text;
@@ -224,6 +225,7 @@ public sealed class ScenarioIntegrationTests : IAsyncLifetime
         await runtime.StartAsync();
         _runtimes.Add(runtime);
         var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") };
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", runtime.WebToken); // M5-12：token 注入（07 §14.2）
         _https.Add(http);
         return http;
     }
@@ -485,6 +487,7 @@ public sealed class ScenarioIntegrationTests : IAsyncLifetime
         _runtimes.Add(runtime);
         await runtime.StartAsync(); // 未注册分支：向导模式
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") };
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", runtime.WebToken); // M5-12：token 注入（07 §14.2）
         _https.Add(http);
         Assert.Equal("unregistered", await GetPhaseAsync(http));
 
@@ -1365,6 +1368,7 @@ public sealed class ScenarioIntegrationTests : IAsyncLifetime
         await runtime.StartAsync();
         _runtimes.Add(runtime);
         var httpA = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") };
+        httpA.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", runtime.WebToken); // M5-12：token 注入（07 §14.2）
         _https.Add(httpA);
         await StartRuntimeAsync(b);
         await WaitPhaseAsync(httpA, "running");
@@ -1525,7 +1529,7 @@ public sealed class ScenarioIntegrationTests : IAsyncLifetime
         await WaitPhaseAsync(httpA, "running");
 
         // WS 收件箱先建（后续每次 GET /api/system/state 现场重算驱动值变化→广播 subnet_conflict）
-        await using var tap = await WsTap.ConnectAsync($"ws://127.0.0.1:{httpA.BaseAddress!.Port}/ws/status");
+        await using var tap = await WsTap.ConnectAsync($"ws://127.0.0.1:{httpA.BaseAddress!.Port}/ws/status?token={httpA.DefaultRequestHeaders.Authorization!.Parameter}"); // M5-12：query token（07 §14.2）
 
         // ① 无冲突静默：conflict=null；M4-01 版本字段（08 §1 注入，Settings 关于区数据源）
         var state = (await GetAsync(httpA, "/api/system/state")).GetProperty("data");

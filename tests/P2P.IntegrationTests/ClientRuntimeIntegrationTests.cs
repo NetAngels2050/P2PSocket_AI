@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -197,6 +198,14 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         return items.GetArrayLength() == 0 ? "" : items[0].GetProperty("state").GetString()!;
     }
 
+    /// <summary>本地 Web HTTP 客户端（M5-12，07 §14.2）：注入 Bearer token——裸 HTTP 401。</summary>
+    private static HttpClient LocalHttp(ClientRuntime runtime)
+    {
+        var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") };
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", runtime.WebToken);
+        return http;
+    }
+
     // ── ① 重启状态恢复：网卡/通道/映射三要素经同一 baseDir 重建（完成判定）──
 
     [Fact]
@@ -211,21 +220,24 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var logs = new List<string>();
         runtime1.Log += logs.Add;
         await runtime1.StartAsync();
-        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime1.WebPort}") })
+        using (var http = LocalHttp(runtime1))
         {
             Assert.Equal("running", await GetPhaseAsync(http));
             Assert.Contains(IPAddress.Loopback, _nic.Ensured); // 网卡已应用（替身记录）
             await WaitStateAsync(http, "failed"); // 真打洞器出队→STUN 探测不可达→failed（确定性）
+        }
 
-            // 模拟服务停止 → 系统拉起（同 baseDir）
-            await runtime1.DisposeAsync();
-            var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
-            await runtime2.StartAsync();
+        // 模拟服务停止 → 系统拉起（同 baseDir；token 随重启轮换——07 §14.2，客户端须随重启重建）
+        await runtime1.DisposeAsync();
+        var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        await runtime2.StartAsync();
+        using (var http = LocalHttp(runtime2))
+        {
             Assert.Equal("running", await GetPhaseAsync(http));
             await WaitStateAsync(http, "failed");
             Assert.Equal(2, _nic.Ensured.Count(ip => ip.Equals(IPAddress.Loopback))); // 两次拉起各应用一次
-            await runtime2.DisposeAsync();
         }
+        await runtime2.DisposeAsync();
     }
 
     private static async Task WaitStateAsync(HttpClient http, string state)
@@ -266,7 +278,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var logs = new List<string>();
         runtime.Log += m => { lock (logs) logs.Add(m); };
         await runtime.StartAsync();
-        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") })
+        using (var http = LocalHttp(runtime))
         {
             // 启动恢复确定性失败：无登录态且无共同分组 → 0x40 不可见 → 4003（仅日志，映射停留 disabled）
             await WaitLogAsync(logs, "恢复失败（startup）");
@@ -317,7 +329,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         runtime1.Log += m => { lock (logs1) logs1.Add(m); };
         await runtime1.StartAsync();
         string username;
-        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime1.WebPort}") })
+        using (var http = LocalHttp(runtime1))
         {
             await WaitLogAsync(logs1, "恢复失败（startup）"); // 未登录+无共同分组：确定性受阻（①b 同款前置）
             username = $"u{Guid.NewGuid():N}"[..12];
@@ -352,7 +364,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var logs2 = new List<string>();
         runtime2.Log += m => { lock (logs2) logs2.Add(m); };
         await runtime2.StartAsync();
-        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime2.WebPort}") })
+        using (var http = LocalHttp(runtime2))
         {
             await WaitLogAsync(logs2, $"已自动登录（{username}");
             using var me = await http.GetAsync("/api/auth/me");
@@ -373,7 +385,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var logs3 = new List<string>();
         runtime3.Log += m => { lock (logs3) logs3.Add(m); };
         await runtime3.StartAsync();
-        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime3.WebPort}") })
+        using (var http = LocalHttp(runtime3))
         {
             await WaitLogAsync(logs3, "恢复失败（startup）"); // 无凭据无登录：回到 ①b 受阻形态
             using var me = await http.GetAsync("/api/auth/me");
@@ -397,7 +409,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var logs = new List<string>();
         runtime.Log += m => { lock (logs) logs.Add(m); };
         await runtime.StartAsync();
-        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") })
+        using (var http = LocalHttp(runtime))
         {
             // 前置与 ①b 同款：未登录恢复受阻 → 建号+对端绑同账号 → 登录 → 补恢复 → failed
             await WaitLogAsync(logs, "恢复失败（startup）");
@@ -464,7 +476,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
 
         var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic });
         await runtime.StartAsync(); // 未注册分支：启动即返回（向导模式）
-        using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") };
+        using var http = LocalHttp(runtime);
         try
         {
             Assert.Equal("unregistered", await GetPhaseAsync(http));
@@ -501,7 +513,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         // 起服务：映射恢复=监听已绑（punch→failed 确定性，同用例①口径）
         var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
         await runtime.StartAsync();
-        using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") })
+        using (var http = LocalHttp(runtime))
             await WaitStateAsync(http, "failed");
         var state = new StateStore(dirA);
         state.Load();
@@ -592,7 +604,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
             Assert.Equal("协议升级，请手动更新", info.Notes);
 
             // 本地代理（04 §2.7）：通道永不能建立 → 拒答窗口缓存回落正是 /upgrade 页数据源
-            using (var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") })
+            using (var http = LocalHttp(runtime))
             {
                 using var response = await http.GetAsync("/api/upgrade/info");
                 var root = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
@@ -627,7 +639,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         await runtime.StartAsync();
         try
         {
-            using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") };
+            using var http = LocalHttp(runtime);
             Assert.Equal("running", await GetPhaseAsync(http)); // 降级不阻断（05 §1.1）
             Assert.Contains(logs, l => l.Contains("降级"));
         }

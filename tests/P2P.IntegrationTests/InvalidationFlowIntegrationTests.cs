@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -346,11 +347,13 @@ public sealed class InvalidationFlowIntegrationTests : IAsyncLifetime
         var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
         await runtime.StartAsync();
         var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") };
+        // M5-12：本地 Web token 注入（07 §14.2）——裸 HTTP 401
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", runtime.WebToken);
         var harness = new RuntimeHarness
         {
             Runtime = runtime,
             Http = http,
-            WsUrl = $"ws://127.0.0.1:{runtime.WebPort}/ws/status",
+            WsUrl = $"ws://127.0.0.1:{runtime.WebPort}/ws/status?token={runtime.WebToken}", // M5-12：query 载体
         };
         Assert.Equal("running", (await GetAsync(http, "/api/system/state")).GetProperty("phase").GetString());
         if (requireMapping)
