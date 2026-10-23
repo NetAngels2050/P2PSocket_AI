@@ -6,12 +6,16 @@
 import { http, HttpResponse } from "msw";
 import type {
   AuditLogView,
+  BlacklistEntry,
   DashboardView,
   DeviceView,
   GroupRequestView,
   GroupView,
   MappingView,
   RelaySessionsView,
+  SecurityCountView,
+  SecurityOverviewView,
+  SecurityStunView,
   UserView,
 } from "@p2p/ui-shared";
 
@@ -29,6 +33,9 @@ export interface MockServerState {
   relaySessions: RelaySessionsView["sessions"]; // M3-11 /relay 会话表
   auditLogs: AuditLogView[]; // M3-11 /system 审计（id 升序存，端点降序出）
   alertTestCalls: string[]; // M5-07 alert-test 调用记录（目标 URL——mock 不真发，供断言闭环）
+  blacklist: BlacklistEntry[]; // M5-09 安全中心黑名单（增删端点真实改此态）
+  lockdownKicked: number; // M5-09 lockdown 响应 kicked（mock 固定值，断言用）
+  securityCounts: { today: SecurityCountView; week: SecurityCountView; stun: SecurityStunView }; // M5-09 overview 计数节
 }
 
 /// 测试固定身份（过滤联动断言用稳定 UUID）
@@ -162,6 +169,22 @@ export function createDefaultServerState(): MockServerState {
         detail: i % 3 === 0 ? JSON.stringify({ macCode: `AA:BB:CC:00:00:${String(i).padStart(2, "0")}` }) : null,
       } satisfies AuditLogView;
     }),
+    // M5-09 安全中心：黑名单（手动一条）+ lockdown 固定响应 + overview 计数节（命中四面）
+    blacklist: [
+      {
+        ip: "203.0.113.99",
+        reason: "扫描探测",
+        source: "manual",
+        createdAtUtc: "2026-10-22T08:00:00Z",
+        expiresAtUtc: null,
+      } satisfies BlacklistEntry,
+    ],
+    lockdownKicked: 2,
+    securityCounts: {
+      today: { loginFail: 2, register: 1, deny: 0 },
+      week: { loginFail: 9, register: 4, deny: 2 },
+      stun: { rate: 12, auth: 3, circuit: 0, since: "2026-10-20T00:00:00Z" },
+    },
   };
 }
 
@@ -449,6 +472,59 @@ export function createServerHandlers(state: MockServerState) {
         );
       state.alertTestCalls.push(url);
       return ok({ sent: true });
+    }),
+
+    // ── M5-09 安全中心（SEC-72、07 §13.2~§13.4）：overview 聚合/黑名单增删/lockdown ──
+    http.get("*/api/security/overview", () => {
+      if (!state.authed) return unauthorized();
+      return ok({
+        today: state.securityCounts.today,
+        week: state.securityCounts.week,
+        stun: state.securityCounts.stun,
+        blacklist: state.blacklist,
+        hits: { control: 3, stun: 1, relay: 0, web: 5 }, // 四面命中（mock 固定值）
+        autoban: {
+          enabled: (state.config.autoban_enabled ?? "1") === "1",
+          windowSec: 600,
+          failCount: 20,
+          durationSec: 3600,
+        },
+        registrationOpen: (state.config.device_registration_open ?? "1") === "1",
+      } satisfies SecurityOverviewView);
+    }),
+
+    http.post("*/api/security/blacklist", async ({ request }) => {
+      if (!state.authed) return unauthorized();
+      const body = (await request.json()) as { ip?: string; reason?: string | null };
+      if (!body?.ip || !/^[0-9a-fA-F:.]+$/.test(body.ip))
+        return badRequest("参数错误（ip 须为合法地址）");
+      if (!state.blacklist.some((e) => e.ip === body.ip))
+        state.blacklist.push({
+          ip: body.ip,
+          reason: body.reason ?? "",
+          source: "manual",
+          createdAtUtc: "2026-10-23T12:00:00Z",
+          expiresAtUtc: null,
+        });
+      return ok({ ip: body.ip });
+    }),
+
+    http.delete("*/api/security/blacklist/:ip", ({ params }) => {
+      if (!state.authed) return unauthorized();
+      const ip = String(params.ip);
+      const i = state.blacklist.findIndex((e) => e.ip === ip);
+      if (i < 0)
+        return HttpResponse.json(
+          { code: 1002, message: "条目不存在", data: null },
+          { status: 404 },
+        );
+      state.blacklist.splice(i, 1);
+      return ok({ ip });
+    }),
+
+    http.post("*/api/security/lockdown", () => {
+      if (!state.authed) return unauthorized();
+      return ok({ kicked: state.lockdownKicked });
     }),
 
     // ── 中继管理（M3-07 端点形状；config 现值走 state.config 两键）────────

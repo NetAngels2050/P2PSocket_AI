@@ -19,9 +19,10 @@ using P2P.Server.Services;
 namespace P2P.Server.Web;
 
 /// <summary>Web 宿主装配与生命周期（IHostedService 载体）。管理端点组随任务渐次挂载（M3-02 认证起）。
-/// relay/stun/limiter 可选尾参：生产 DI 注入已注册单例（中继/STUN 运行统计与限速直读直调）；测试裸
-/// API 形态可缺省（仪表盘该节呈零值快照、限速变更不生效仅落库）——沿 AdminService 可选尾参先例
-/// （MS DI 对已注册服务仍注入、未注册才取默认）。</summary>
+/// relay/stun/limiter/control 可选尾参：生产 DI 注入已注册单例（中继/STUN 运行统计与限速直读直调；
+/// M5-09 control 供安全中心 lockdown 踢会话）；测试裸 API 形态可缺省（仪表盘该节呈零值快照、限速
+/// 变更不生效仅落库、lockdown kicked=0）——沿 AdminService 可选尾参先例（MS DI 对已注册服务仍
+/// 注入、未注册才取默认）。</summary>
 public sealed class ServerWebHostService(
     ServerOptions options,
     TimeProvider time,
@@ -36,7 +37,8 @@ public sealed class ServerWebHostService(
     RelayRateLimiter? limiter = null,
     LoginThrottle? loginThrottle = null,
     AlertPusher? alertPusher = null,
-    BlacklistStore? blacklist = null) : IHostedService
+    BlacklistStore? blacklist = null,
+    ControlServer? control = null) : IHostedService
 {
     private WebApplication? _app;
 
@@ -46,7 +48,7 @@ public sealed class ServerWebHostService(
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _app = Build(options, time, sessions, dbFactory, audit, admin, registry, groups, relay, stun,
-            limiter, WebRootOverride, loginThrottle, alertPusher, blacklist);
+            limiter, WebRootOverride, loginThrottle, alertPusher, blacklist, control);
         await _app.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -61,7 +63,8 @@ public sealed class ServerWebHostService(
         AdminService admin, DeviceRegistry registry, GroupService groups,
         RelayService? relay = null, StunService? stun = null, RelayRateLimiter? limiter = null,
         string? webRootOverride = null, LoginThrottle? loginThrottle = null,
-        AlertPusher? alertPusher = null, BlacklistStore? blacklist = null)
+        AlertPusher? alertPusher = null, BlacklistStore? blacklist = null,
+        ControlServer? control = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls($"http://{options.Listen.WebBind}:{options.Listen.Web}");
@@ -89,10 +92,11 @@ public sealed class ServerWebHostService(
         new AdminMappingsApi(dbFactory).Map(app);
         new AdminSystemApi(dbFactory, limiter, audit, loginThrottle).Map(app);
         new AdminAuditLogsApi(dbFactory).Map(app);
-        // M5-07/08 安全中心端点组（04 §3.2）：alert-test（M5-07）+ blacklist 增删（M5-08，
-        // 07 §13.3——处置审计 ip_block/ip_unblock）；M5-09 overview/lockdown 随任务挂载
+        // M5-07/08/09 安全中心端点组（04 §3.2）：alert-test（M5-07）+ blacklist 增删（M5-08，
+        // 07 §13.3——处置审计 ip_block/ip_unblock）+ overview 聚合/lockdown 踢全部会话
+        // （M5-09，07 §13.2/§13.4）
         if (blacklist is not null || alertPusher is not null)
-            new SecurityApi(dbFactory, audit, blacklist, alertPusher).Map(app);
+            new SecurityApi(dbFactory, time, audit, blacklist, alertPusher, stun, control).Map(app);
 
         // M5-08 IP 黑名单中间件（07 §13.3）：全端点、认证之前——被封 IP 一切端点 403 {2003 FORBIDDEN}
         // （含 /api/auth/login：连登录面一并拒，防止绕面探测）；命中只计数不审计（OQ-22①）

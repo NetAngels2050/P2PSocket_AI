@@ -1,5 +1,5 @@
 // 本文件由 export-ts 反射生成（06 §5、08 §2③），禁止手改；
-// 源：ServerWebHost 服务端 Web 路由表（src/Tools/ExportTs @ 2026-10-22T16:53:39Z）。前端禁止手写 API 字符串路径。
+// 源：ServerWebHost 服务端 Web 路由表（src/Tools/ExportTs @ 2026-10-23T02:04:11Z）。前端禁止手写 API 字符串路径。
 
 export const ServerApiPaths = {
   AuditLogs: "/api/audit-logs",
@@ -23,6 +23,8 @@ export const ServerApiPaths = {
   SecurityAlertTest: "/api/security/alert-test",
   SecurityBlacklist: "/api/security/blacklist",
   SecurityBlacklistByIp: "/api/security/blacklist/{ip}",
+  SecurityLockdown: "/api/security/lockdown",
+  SecurityOverview: "/api/security/overview",
   SystemConfig: "/api/system/config",
   Users: "/api/users",
   UsersByIdDisable: "/api/users/{id}/disable",
@@ -56,6 +58,8 @@ export const ServerApiEndpoints = [
   { path: "/api/security/alert-test", methods: ["POST"] },
   { path: "/api/security/blacklist", methods: ["POST"] },
   { path: "/api/security/blacklist/{ip}", methods: ["DELETE"] },
+  { path: "/api/security/lockdown", methods: ["POST"] },
+  { path: "/api/security/overview", methods: ["GET"] },
   { path: "/api/system/config", methods: ["GET"] },
   { path: "/api/system/config", methods: ["PUT"] },
   { path: "/api/users", methods: ["GET"] },

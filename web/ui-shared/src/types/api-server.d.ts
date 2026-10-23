@@ -1,5 +1,5 @@
 // 本文件由 export-ts 反射生成（06 §5、编制定案③），禁止手改。
-// 源：P2P.Server Web 展示 DTO（ServerViews，src/Tools/ExportTs @ 2026-10-22T16:53:39Z）。
+// 源：P2P.Server Web 展示 DTO（ServerViews，src/Tools/ExportTs @ 2026-10-23T02:04:11Z）。
 
 /** 服务端响应包裹（04 §3：code=0 成功；!=0 见错误码表 04 §5）。注意字段名 message（客户端为 msg）。 */
 export interface ServerApiEnvelope<T> {
@@ -259,6 +259,54 @@ export interface ServerVersionView {
   version: string;
   commit: string;
   buildDate: string;
+}
+
+
+export interface SecurityCountView {
+  loginFail: number;
+  register: number;
+  deny: number;
+}
+
+
+export interface SecurityStunView {
+  rate: number;
+  auth: number;
+  circuit: number;
+  since: string | null;
+}
+
+
+export interface BlacklistEntry {
+  ip: string;
+  reason: string;
+  source: string;
+  createdAtUtc: string;
+  expiresAtUtc: string | null;
+}
+
+
+export interface AutobanRuleView {
+  enabled: boolean;
+  windowSec: number;
+  failCount: number;
+  durationSec: number;
+}
+
+
+export interface SecurityOverviewView {
+  today: SecurityCountView;
+  week: SecurityCountView;
+  stun: SecurityStunView;
+  blacklist: BlacklistEntry[];
+  hits: Record<string, number>;
+  autoban: AutobanRuleView;
+  registrationOpen: boolean;
+}
+
+
+export interface LockdownResultView {
+  kicked: number;
 }
 
 

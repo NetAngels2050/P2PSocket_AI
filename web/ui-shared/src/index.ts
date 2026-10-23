@@ -42,7 +42,10 @@ export type {
   TunnelListView,
   RekeyResultView,
 } from "./types/api";
-// M3-09 服务端 Web 生成物（编制定案③：server-app 消费；与客户端分文件防常量名冲突）
+// M3-09 服务端 Web 生成物（编制定案③：server-app 消费；与客户端分文件防常量名冲突）。
+// M5-09 起随 ExportTs 生成物对齐重导出（此前手维护白名单漏 M3-10/11 起渐增的 DTO——
+// server-app 消费侧长期以 TS2305 存量形式存在）；GroupView/GroupRequestView/MappingView
+// 三名与客户端域同名（ExportTs 侧全限定同因）——上方客户端块先占，此处不入（现状语义不变）
 export { ServerApiPaths, ServerApiEndpoints } from "./types/api-server-paths";
 export type {
   ServerApiEnvelope,
@@ -54,5 +57,32 @@ export type {
   StunDroppedView,
   PunchStatsView,
   HourlyBucketView,
+  UserView,
+  UserListView,
+  TempPasswordResult,
+  DeviceView,
+  DeviceListView,
+  RemoteCodeResult,
+  GroupListView,
+  PolicyResult,
+  GroupRequestListView,
+  DecisionResult,
+  MappingBytesView,
+  MappingListView,
+  ConfigItemView,
+  ConfigListView,
+  RelayConfigView,
+  RelayEndView,
+  RelaySessionView,
+  RelaySessionsView,
+  AuditLogView,
+  AuditLogListView,
+  ServerVersionView,
+  SecurityCountView,
+  SecurityStunView,
+  BlacklistEntry,
+  AutobanRuleView,
+  SecurityOverviewView,
+  LockdownResultView,
   MappingStatusProjection,
 } from "./types/api-server";

@@ -134,3 +134,25 @@ public sealed record AuditLogView(long Id, DateTime Ts, string Event, Guid? Devi
 
 /// <summary>审计日志列表（newest-first + event 过滤 + 分页）。</summary>
 public sealed record AuditLogListView(List<AuditLogView> Items, int Total, int Page, int PageSize);
+
+// ── M5-09 安全中心载荷（SEC-72、FR-S-827；07 §13.2~§13.4）──
+
+/// <summary>时间窗计数（GET /api/security/overview；07 §13.2 三族聚合：登录失败/新注册/授权拒绝）。
+/// 今日=UTC 日界、近 7 天=滚动 168h，血缘=audit_logs 时间窗查询（今日集为近 7 天子集）。</summary>
+public sealed record SecurityCountView(int LoginFail, int Register, int Deny);
+
+/// <summary>STUN 丢弃三分桶（07 §13.2）——StunGuard 进程累计无时间窗事件源，呈自启动累计；
+/// since=启动时刻（uptime 反推，UTC；裸 API 形态 null）。</summary>
+public sealed record SecurityStunView(long Rate, long Auth, long Circuit, DateTime? Since);
+
+/// <summary>自动封禁规则现值（07 §13.3 四键 tick 现读回显；改键经 /system 配置页）。</summary>
+public sealed record AutobanRuleView(bool Enabled, int WindowSec, int FailCount, int DurationSec);
+
+/// <summary>安全中心聚合（GET /api/security/overview）：hits=黑名单四面命中计数（内存态重启清零）。</summary>
+public sealed record SecurityOverviewView(
+    SecurityCountView Today, SecurityCountView Week, SecurityStunView Stun,
+    List<Services.BlacklistEntry> Blacklist, Dictionary<string, long> Hits,
+    AutobanRuleView Autoban, bool RegistrationOpen);
+
+/// <summary>踢全部会话结果（POST /api/security/lockdown，07 §13.4）：kicked=断开的在线控制会话数。</summary>
+public sealed record LockdownResultView(int Kicked);

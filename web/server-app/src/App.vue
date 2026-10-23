@@ -1,10 +1,10 @@
 <script setup lang="ts">
-// M3-09 根组件（06 §3）：AdminLayout 八路由菜单（ui-shared 复用）；/login 免布局（独立登录页）。
+// M3-09 根组件（06 §3）：AdminLayout 菜单（ui-shared 复用；M5-09 起九路由——安全中心插入）；/login 免布局（独立登录页）。
 // 登录态=Cookie 会话（服务端 8h）+ 刷新标记（AUTH_KEY）；挂载时标记存在则探测一次
 // （401 由 api.ts 拦截器清标记跳登录——守卫在下次导航生效，拦截器即时生效）。
 import { computed, onMounted, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Odometer, User, Monitor, Share, Link, Switch, Setting } from "@element-plus/icons-vue";
+import { Odometer, User, Monitor, Share, Link, Switch, Lock, Setting } from "@element-plus/icons-vue";
 import { AdminLayout } from "@p2p/ui-shared";
 import { useAuthStore } from "./stores/auth";
 import { useDashboardStore } from "./stores/dashboard";
@@ -17,6 +17,7 @@ const MENU = [
   { path: "/groups", label: "分组", icon: Share },
   { path: "/mappings", label: "映射", icon: Link },
   { path: "/relay", label: "中继", icon: Switch },
+  { path: "/security", label: "安全", icon: Lock }, // M5-09 安全中心（06 §3）
   { path: "/system", label: "系统", icon: Setting },
 ];
 

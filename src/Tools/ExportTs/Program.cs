@@ -229,6 +229,12 @@ internal static partial class TsGen // 生成逻辑集中（顶层语句宿主�
         typeof(AuditLogView),
         typeof(AuditLogListView),
         typeof(ServerVersionView),  // M4-01 仪表盘角标（dashboard.version，08 §1 注入）
+        typeof(SecurityCountView),  // M5-09 安全中心聚合（FR-S-827，07 §13.2~§13.4）
+        typeof(SecurityStunView),
+        typeof(P2P.Server.Services.BlacklistEntry), // M5-09 黑名单快照行（M5-08 存储型复用）
+        typeof(AutobanRuleView),
+        typeof(SecurityOverviewView),
+        typeof(LockdownResultView),
     ];
 
     /// <summary>api-server.d.ts（M3-09 编制定案③：server-app 类型同源）。</summary>
