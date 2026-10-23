@@ -13,6 +13,8 @@ namespace P2P.Server.Services;
 /// ＋③总量上限（仅拦新增行——覆盖式恢复不增设备数放行，否则达上限后存量设备凭据丢失即被永久锁死）；
 /// 三闸统一 4006 REGISTRATION_DENIED（对外不区分拒因防探测枚举），拒因仅入审计 register_deny
 /// （reason=switch|rate|quota）；拒绝后连接停留 NeedRegister 可重试不断连。
+/// M5-15/SEC-85（07 §14.5）：Hostname trim 后 1~64，超限/空白 → 1001 hostname_invalid
+/// （先于三闸——不落库不审计不耗频控令牌，停留 NeedRegister 可重试）。
 /// 新建设备（ECIES 下发 deviceSecret、固定 .2、默认分组入组——遵循分组 JoinPolicy：free 即入、
 /// approval 建 pending 待审行，SEC-62/07 §5.2）；
 /// macCode 离线命中 → 覆盖式恢复（OQ-14：保留 deviceId/远程码/归属/分组，存量映射不失效）；
@@ -47,6 +49,16 @@ public sealed class RegistrationService(
         {
             // 死字段封堵（M5-06/SEC-26，07 §10.3）：Password 双端从未使用——非空即按平行明文通路 5004 硬拒
             await session.SendErrorAsync(ErrorCode.VersionNotSupported, "password_ecies_required");
+            return;
+        }
+
+        // 输入长度上限（SEC-85、07 §14.5）：Hostname trim 后 1~64（协议边界常量不设配置项）。
+        // 0x10 无 Ok 载体 → Error 1001（Register 不落库不审计——防超长值入审计/耗频控令牌），
+        // 停留 NeedRegister 可重试不断连
+        var hostname = msg.Hostname?.Trim() ?? "";
+        if (hostname.Length is < 1 or > 64)
+        {
+            await session.SendErrorAsync(ErrorCode.BadRequest, "hostname_invalid");
             return;
         }
 
@@ -94,7 +106,7 @@ public sealed class RegistrationService(
             var recoveredSecret = RandomGenerator.Bytes(32);
             existing.DeviceSecret = recoveredSecret;
             existing.StaticPubKey = msg.StaticPubKey;
-            existing.DeviceName = msg.Hostname;
+            existing.DeviceName = hostname;
             existing.Os = msg.Os;
             existing.ClientVersion = msg.ClientVersion;
             existing.LastSeenAt = now;
@@ -121,7 +133,7 @@ public sealed class RegistrationService(
         var device = new Device
         {
             Id = Guid.NewGuid(),
-            DeviceName = msg.Hostname,
+            DeviceName = hostname,
             Os = msg.Os,
             ClientVersion = msg.ClientVersion,
             MacCode = msg.MacCode,

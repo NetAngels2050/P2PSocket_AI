@@ -243,7 +243,10 @@ onMounted(async () => {
             label="用户名"
             prop="username"
           >
-            <el-input v-model="username" />
+            <el-input
+              v-model="username"
+              maxlength="64"
+            />
           </el-form-item>
           <el-form-item
             label="密码"
@@ -260,7 +263,10 @@ onMounted(async () => {
           label="设备名"
           prop="deviceName"
         >
-          <el-input v-model="deviceName" />
+          <el-input
+            v-model="deviceName"
+            maxlength="64"
+          />
         </el-form-item>
       </el-form>
       <div class="actions">

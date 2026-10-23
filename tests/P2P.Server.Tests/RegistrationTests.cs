@@ -68,7 +68,8 @@ public sealed class RegistrationTests : IAsyncLifetime
     }
 
     /// <summary>走完整注册链路（未签名 Register → RegisterAck），解 ECIES 转签名会话。</summary>
-    private async Task<(TestPcpClient Client, EcKeyPair Key, RegisterAck Ack, byte[] Secret)> RegisterAsync(string macCode)
+    private async Task<(TestPcpClient Client, EcKeyPair Key, RegisterAck Ack, byte[] Secret)> RegisterAsync(
+        string macCode, string hostname = "host-x")
     {
         var client = await ConnectAsync();
         var helloAck = await client.HelloAsync(deviceId: null);
@@ -76,7 +77,7 @@ public sealed class RegistrationTests : IAsyncLifetime
 
         var key = EcKeyPair.Generate();
         await client.SendAsync(new Register(client.NextSeq(), client.Now(), MsgType.Register,
-            macCode, "host-x", "windows", "0.1.0", key.ExportPublicKey(), null, null, null), sign: false);
+            macCode, hostname, "windows", "0.1.0", key.ExportPublicKey(), null, null, null), sign: false);
         var ack = await client.ReceiveAsync<RegisterAck>() ?? throw new IOException("注册无应答");
 
         var secret = Ecies.Decrypt(key, ack.DeviceSecretBox);
@@ -192,6 +193,47 @@ public sealed class RegistrationTests : IAsyncLifetime
 
         Assert.True(_registry.IsOnline(ack.DeviceId), "原设备不受影响");
         _ = online;
+    }
+
+    // ── M5-15 输入长度上限（SEC-85、07 §14.5）────────────────────────
+
+    [Fact]
+    public async Task Register_Hostname_OverLimitOrBlank_Gets1001_StaysRetriable()
+    {
+        var client = await ConnectAsync();
+        await client.HelloAsync(deviceId: null);
+        var key = EcKeyPair.Generate();
+
+        // 65 字符超上限 / 空白 / 空串 → 1001 hostname_invalid（0x10 无 Ok 载体）
+        foreach (var bad in new[] { new string('名', 65), "   ", "" })
+        {
+            await client.SendAsync(new Register(client.NextSeq(), client.Now(), MsgType.Register,
+                "P2P-HOST000001", bad, "windows", "0.1.0", key.ExportPublicKey(), null, null, null), sign: false);
+            var error = await client.ReceiveAsync<ErrorMessage>();
+            Assert.NotNull(error);
+            Assert.Equal(ErrorCode.BadRequest, error!.Code);
+            Assert.Equal("hostname_invalid", error.HttpLikeMsg);
+        }
+
+        // 拒绝不断连：同连接换合法 Hostname 立即成功（停留 NeedRegister 可重试，07 §14.5）
+        Assert.False(await client.WaitClosedAsync(), "hostname_invalid 不应断连");
+        await client.SendAsync(new Register(client.NextSeq(), client.Now(), MsgType.Register,
+            "P2P-HOST000001", "  合法名  ", "windows", "0.1.0", key.ExportPublicKey(), null, null, null), sign: false);
+        var ack = await client.ReceiveAsync<RegisterAck>() ?? throw new IOException("注册无应答");
+
+        // trim 口径：落库去两端空白
+        await using var db = CreateDb();
+        var device = await db.Devices.AsNoTracking().SingleAsync(d => d.MacCode == "P2P-HOST000001");
+        Assert.Equal("合法名", device.DeviceName);
+    }
+
+    [Fact]
+    public async Task Register_Hostname_Boundary64_Passes()
+    {
+        var (_, _, ack, _) = await RegisterAsync("P2P-HOST000002", new string('名', 64));
+        await using var db = CreateDb();
+        var device = await db.Devices.AsNoTracking().SingleAsync(d => d.Id == ack.DeviceId);
+        Assert.Equal(new string('名', 64), device.DeviceName);
     }
 
     // ── M5-03 注册入组遵循默认分组策略（SEC-62、07 §5.2）─────────────

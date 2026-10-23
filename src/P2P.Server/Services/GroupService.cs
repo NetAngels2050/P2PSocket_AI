@@ -39,7 +39,10 @@ public sealed class GroupService(
             await session.SendErrorAsync(ErrorCode.Unauthorized, "login_required");
             return;
         }
-        if (string.IsNullOrWhiteSpace(msg.Name))
+        // 输入长度上限（SEC-85、07 §14.5）：trim 后 1~64（协议边界常量不设配置项；
+        // null/空白同拒——?.Trim() ?? "" 兜直连 null 帧），超限 → Ack{groupId=Guid.Empty}
+        var name = msg.Name?.Trim() ?? "";
+        if (name.Length is < 1 or > 64)
         {
             await session.SendAsync(new GroupCreateAck(session.NextSeq(), session.ServerTimestamp(),
                 MsgType.GroupCreate, Guid.Empty));
@@ -49,7 +52,7 @@ public sealed class GroupService(
         var group = new Group
         {
             Id = Guid.NewGuid(),
-            Name = msg.Name.Trim(),
+            Name = name,
             OwnerUserId = owner,
             JoinPolicy = msg.Policy == JoinPolicy.Approval ? "approval" : "free",
             CreatedAt = _time.GetLocalNow().UtcDateTime,
@@ -389,10 +392,20 @@ public sealed class GroupService(
             return;
         }
 
+        // 输入长度上限（SEC-85、07 §14.5）：改名时 Name trim 后 1~64（协议边界常量不设配置项），
+        // 超限/空白 → Ack Ok=false；Name=null 纯策略更新不受限
+        var name = msg.Name?.Trim() ?? "";
+        if (msg.Name is not null && name.Length is < 1 or > 64)
+        {
+            await session.SendAsync(new GroupUpdateAck(session.NextSeq(), session.ServerTimestamp(),
+                MsgType.GroupUpdate, false));
+            return;
+        }
+
         await using var db = await dbFactory.CreateDbContextAsync();
         var query = db.Groups.Where(g => g.Id == msg.GroupId);
         if (msg.Name is not null)
-            await query.ExecuteUpdateAsync(s => s.SetProperty(g => g.Name, msg.Name.Trim()));
+            await query.ExecuteUpdateAsync(s => s.SetProperty(g => g.Name, name));
         if (msg.Policy is not null)
             await query.ExecuteUpdateAsync(s => s.SetProperty(
                 g => g.JoinPolicy, msg.Policy == JoinPolicy.Approval ? "approval" : "free"));

@@ -265,6 +265,39 @@ public sealed class UserTests : IAsyncLifetime
         Assert.Equal(ErrorCode.RegistrationClosed, error!.Code);
     }
 
+    [Fact]
+    public async Task UserRegister_LengthLimitAndTrim()
+    {
+        var client = await ConnectRegisteredAsync();
+
+        // 超长 65 → Ack Ok=false（M5-15/SEC-85：trim 后 1~64 协议边界常量）
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
+            new string('u', 65), "", client.BoxLoginSecret("limit-password")));
+        var tooLong = await client.ReceiveAsync<UserRegisterAck>();
+        Assert.False(tooLong!.Ok);
+
+        // 空白同拒（trim 口径）
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
+            "   ", "", client.BoxLoginSecret("limit-password")));
+        var blank = await client.ReceiveAsync<UserRegisterAck>();
+        Assert.False(blank!.Ok);
+
+        // 边界 64 过
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
+            new string('u', 64), "", client.BoxLoginSecret("limit-password")));
+        var boundary = await client.ReceiveAsync<UserRegisterAck>();
+        Assert.True(boundary!.Ok);
+
+        // 合法名 trim 后落库
+        await client.SendAsync(new UserRegister(client.NextSeq(), client.Now(), MsgType.UserRegister,
+            "  trim用户  ", "", client.BoxLoginSecret("limit-password")));
+        var ack = await client.ReceiveAsync<UserRegisterAck>();
+        Assert.True(ack!.Ok);
+        await using var db = CreateDb();
+        var user = await db.Users.AsNoTracking().SingleAsync(u => u.Username == "trim用户");
+        Assert.NotNull(user);
+    }
+
     // ── 0x23 修改自己密码（M2-27，FR-S-205）───────────────────────────
 
     [Fact]

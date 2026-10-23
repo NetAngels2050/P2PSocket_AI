@@ -224,6 +224,73 @@ public sealed class GroupTests : IAsyncLifetime
         Assert.Equal(ErrorCode.Forbidden, error!.Code);
     }
 
+    // ── M5-15 分组名长度上限（SEC-85、07 §14.5）──────────────────────
+
+    [Fact]
+    public async Task GroupName_LengthLimit_CreateAndUpdate()
+    {
+        var (owner, _) = await ConnectLoggedInAsync("owner-len");
+
+        // 0x50 超长 65 / 空白 → Ack{groupId=Guid.Empty}（既有校验失败同式）
+        await owner.SendAsync(new GroupCreate(owner.NextSeq(), owner.Now(), MsgType.GroupCreate,
+            new string('组', 65), JoinPolicy.Free));
+        var tooLong = await owner.ReceiveAsync<GroupCreateAck>();
+        Assert.Equal(Guid.Empty, tooLong!.GroupId);
+        await owner.SendAsync(new GroupCreate(owner.NextSeq(), owner.Now(), MsgType.GroupCreate,
+            "   ", JoinPolicy.Free));
+        var blank = await owner.ReceiveAsync<GroupCreateAck>();
+        Assert.Equal(Guid.Empty, blank!.GroupId);
+
+        // 0x50 边界 64 过 + trim 落库
+        await owner.SendAsync(new GroupCreate(owner.NextSeq(), owner.Now(), MsgType.GroupCreate,
+            new string('组', 64), JoinPolicy.Free));
+        var boundary = await owner.ReceiveAsync<GroupCreateAck>();
+        Assert.NotEqual(Guid.Empty, boundary!.GroupId);
+
+        await owner.SendAsync(new GroupCreate(owner.NextSeq(), owner.Now(), MsgType.GroupCreate,
+            "  长度组  ", JoinPolicy.Free));
+        var created = await owner.ReceiveAsync<GroupCreateAck>();
+        Assert.NotEqual(Guid.Empty, created!.GroupId);
+        await using (var db = CreateDb())
+        {
+            var g = await db.Groups.AsNoTracking().SingleAsync(x => x.Id == created.GroupId);
+            Assert.Equal("长度组", g.Name);
+        }
+
+        // 0x55 改名超长/空白 → Ok=false 且名字不变
+        await owner.SendAsync(new GroupUpdate(owner.NextSeq(), owner.Now(), MsgType.GroupUpdate,
+            boundary.GroupId, new string('组', 65), null));
+        var badUpdate = await owner.ReceiveAsync<GroupUpdateAck>();
+        Assert.False(badUpdate!.Ok);
+        await owner.SendAsync(new GroupUpdate(owner.NextSeq(), owner.Now(), MsgType.GroupUpdate,
+            boundary.GroupId, "  ", null));
+        var blankUpdate = await owner.ReceiveAsync<GroupUpdateAck>();
+        Assert.False(blankUpdate!.Ok);
+        await using (var db = CreateDb())
+        {
+            var g = await db.Groups.AsNoTracking().SingleAsync(x => x.Id == boundary.GroupId);
+            Assert.Equal(new string('组', 64), g.Name); // 拒绝路径不动库
+        }
+
+        // 0x55 合法改名 trim 落库（Name+Policy 同帧）
+        await owner.SendAsync(new GroupUpdate(owner.NextSeq(), owner.Now(), MsgType.GroupUpdate,
+            boundary.GroupId, "  新名  ", JoinPolicy.Approval));
+        var updated = await owner.ReceiveAsync<GroupUpdateAck>();
+        Assert.True(updated!.Ok);
+
+        // 0x55 Name=null 纯策略更新不受长度闸影响（名字保持）
+        await owner.SendAsync(new GroupUpdate(owner.NextSeq(), owner.Now(), MsgType.GroupUpdate,
+            boundary.GroupId, null, JoinPolicy.Free));
+        var policyOnly = await owner.ReceiveAsync<GroupUpdateAck>();
+        Assert.True(policyOnly!.Ok);
+        await using (var db = CreateDb())
+        {
+            var g = await db.Groups.AsNoTracking().SingleAsync(x => x.Id == boundary.GroupId);
+            Assert.Equal("新名", g.Name);
+            Assert.Equal("free", g.JoinPolicy);
+        }
+    }
+
     // ── M2-09 辅助：独立账号（跨账号共享入组，05 §1）──────────────────
 
     /// <summary>已注册设备注册独立用户并登录（默认 username 同密码）。</summary>

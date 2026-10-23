@@ -30,7 +30,8 @@ public sealed class UserService(
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
     /// <summary>0x20 用户注册：registration_open=0 → 2004；用户名占用 → Ack Ok=false。
-    /// M5-06/SEC-26：密码经 PasswordBox（ECIES）；缺失/明文非空 → 5004 硬切（07 §10.3，无明文双轨）。</summary>
+    /// M5-06/SEC-26：密码经 PasswordBox（ECIES）；缺失/明文非空 → 5004 硬切（07 §10.3，无明文双轨）。
+    /// M5-15/SEC-85：Username trim 后 1~64（07 §14.5，超限/空白 → Ack Ok=false）。</summary>
     public async Task HandleUserRegisterAsync(ControlSession session, UserRegister msg)
     {
         await using var db = await dbFactory.CreateDbContextAsync();
@@ -44,13 +45,16 @@ public sealed class UserService(
             await session.SendErrorAsync(ErrorCode.VersionNotSupported, "password_ecies_required");
             return;
         }
-        if (string.IsNullOrWhiteSpace(msg.Username) || password.Length < 6)
+        // 输入长度上限（SEC-85、07 §14.5）：trim 后 1~64（与 0x13 改名同口径；协议边界常量不设
+        // 配置项；null/空白同拒——MessagePack 不强制非空标注，?.Trim() ?? "" 兜直连 null 帧）
+        var username = msg.Username?.Trim() ?? "";
+        if (username.Length is < 1 or > 64 || password.Length < 6)
         {
             await session.SendAsync(new UserRegisterAck(session.NextSeq(), session.ServerTimestamp(),
                 MsgType.UserRegister, false));
             return;
         }
-        if (await db.Users.AsNoTracking().AnyAsync(u => u.Username == msg.Username))
+        if (await db.Users.AsNoTracking().AnyAsync(u => u.Username == username))
         {
             await session.SendAsync(new UserRegisterAck(session.NextSeq(), session.ServerTimestamp(),
                 MsgType.UserRegister, false));
@@ -61,7 +65,7 @@ public sealed class UserService(
         db.Users.Add(new User
         {
             Id = Guid.NewGuid(),
-            Username = msg.Username,
+            Username = username,
             PasswordHash = PasswordHasher.Hash(password),
             CreatedAt = now,
             UpdatedAt = now,
