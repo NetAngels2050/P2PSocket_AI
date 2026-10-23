@@ -45,6 +45,15 @@ public sealed class AdminSystemApi(
             "须为 60~86400（秒）"),
         ["login_delay_cap_ms"] = (v => int.TryParse(v, out var n) && n is >= 0 and <= 60000,
             "须为 0~60000（毫秒，0=不延迟）"),
+        // M5-08/SEC-73 自动封禁四键（AlertPusher tick 现读即时生效——运行期键不入 RestartKeys；
+        // enabled=0 只关判定，既有条目不受影响，07 §13.3）
+        ["autoban_enabled"] = (v => v is "0" or "1", "须为 0|1"),
+        ["autoban_window_sec"] = (v => int.TryParse(v, out var n) && n is >= 60 and <= 86400,
+            "须为 60~86400（秒）"),
+        ["autoban_fail_count"] = (v => int.TryParse(v, out var n) && n is >= 1 and <= 1000000,
+            "须为 1~1000000（次）"),
+        ["autoban_duration_sec"] = (v => int.TryParse(v, out var n) && n is >= 60 and <= 86400,
+            "须为 60~86400（秒）"),
         // M5-07/SEC-71 告警七键（AlertPusher 每 tick 现读即时生效——皆运行期键不入 RestartKeys）
         ["alert_enabled"] = (v => v is "0" or "1", "须为 0|1"),
         ["alert_webhook_url"] = (v => v.Length == 0

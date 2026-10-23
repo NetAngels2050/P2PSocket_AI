@@ -245,6 +245,57 @@ public sealed class AlertPusherTests : IDisposable
         Assert.False(await _pusher.TriggerTestAsync("http://stub/hook"));
     }
 
+    // ── M5-08 自动封禁判定（SEC-73、07 §13.3：与告警通道同 tick、开关独立）──
+
+    [Fact]
+    public async Task 自动封禁_窗口失败达阈值_加auto条目与审计_刷新不重复记()
+    {
+        SetConfig("autoban_window_sec", "600");
+        SetConfig("autoban_fail_count", "3");
+        SetConfig("autoban_duration_sec", "3600");
+        await using var blacklist = new BlacklistStore(_factory, _time);
+        var audit = new AuditLogger(_factory, _time);
+        var pusher = new AlertPusher(_factory, _throttle, _metrics, _time, blacklist: blacklist,
+            http: new HttpClient(_stub), audit: audit);
+
+        for (var i = 0; i < 3; i++) _throttle.RecordFailure(LoginThrottle.DimIp, "203.0.113.77");
+        await pusher.TickOnceAsync();
+
+        Assert.True(blacklist.IsBlocked("203.0.113.77"));
+        var entry = Assert.Single(blacklist.Snapshot());
+        Assert.Equal(BlacklistStore.SourceAuto, entry.Source);
+        Assert.Equal(_time.GetLocalNow().UtcDateTime.AddHours(1),
+            entry.ExpiresAtUtc!.Value, TimeSpan.FromSeconds(1)); // 封 autoban_duration_sec
+        using (var db = CreateDb())
+        {
+            var row = Assert.Single(db.AuditLogs, a => a.Event == "ip_auto_block");
+            Assert.Contains("203.0.113.77", row.Detail);
+        }
+
+        // 下一 tick 阈值仍满足 → 刷新（延长到期）不重复审计（首封行已是处置证据）
+        _time.Advance(TimeSpan.FromSeconds(30));
+        await pusher.TickOnceAsync();
+        using (var db = CreateDb())
+        {
+            Assert.Single(db.AuditLogs, a => a.Event == "ip_auto_block");
+            Assert.Single(blacklist.Snapshot());
+        }
+    }
+
+    [Fact]
+    public async Task 自动封禁_开关关_只关判定_未封不入列()
+    {
+        SetConfig("autoban_enabled", "0"); // 种子缺省 1，此处显式关
+        SetConfig("autoban_fail_count", "3");
+        await using var blacklist = new BlacklistStore(_factory, _time);
+        var pusher = new AlertPusher(_factory, _throttle, _metrics, _time, blacklist: blacklist,
+            http: new HttpClient(_stub));
+
+        for (var i = 0; i < 5; i++) _throttle.RecordFailure(LoginThrottle.DimIp, "203.0.113.77"); // 超 阈值也不判
+        await pusher.TickOnceAsync();
+        Assert.False(blacklist.IsBlocked("203.0.113.77"));
+    }
+
     /// <summary>stub HTTP handler：记录与应答可控（默认 200）。</summary>
     private sealed class StubHandler : HttpMessageHandler
     {

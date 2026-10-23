@@ -112,6 +112,11 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
         Assert.Equal("200", byKey["alert_stun_drop_count"].GetProperty("value").GetString());
         Assert.False(byKey["alert_enabled"].GetProperty("restartRequired").GetBoolean());
         Assert.False(byKey["alert_webhook_url"].GetProperty("restartRequired").GetBoolean());
+        Assert.Equal("1", byKey["autoban_enabled"].GetProperty("value").GetString()); // M5-08 缺省开
+        Assert.Equal("600", byKey["autoban_window_sec"].GetProperty("value").GetString());
+        Assert.Equal("20", byKey["autoban_fail_count"].GetProperty("value").GetString());
+        Assert.Equal("3600", byKey["autoban_duration_sec"].GetProperty("value").GetString());
+        Assert.False(byKey["autoban_enabled"].GetProperty("restartRequired").GetBoolean()); // tick 现读
     }
 
     [Fact]
@@ -187,6 +192,9 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
             ["alert_window_sec"] = "30",                   // M5-07 窗口下界（60s）
             ["alert_silence_sec"] = "-1",                  // M5-07 静默负值
             ["alert_login_fail_count"] = "0",              // M5-07 阈值下界
+            ["autoban_enabled"] = "yes",                   // M5-08 非 0|1
+            ["autoban_window_sec"] = "30",                 // M5-08 窗口下界（60s）
+            ["autoban_duration_sec"] = "86401",            // M5-08 时长上界（86400s）
             ["default_join_policy"] = "open",              // 域外
             ["relay_rate_limit"] = "99999999999",          // 超 int
             ["update_url"] = "ftp://x",                    // 非 http(s)
@@ -218,17 +226,20 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
             ["alert_enabled"] = "1",
             ["alert_webhook_url"] = "http://192.168.1.10:8080/hook",
             ["alert_login_fail_count"] = "20",
+            ["autoban_fail_count"] = "30", // M5-08：同款库值持久（tick 现读生效）
         });
         Assert.Equal(HttpStatusCode.OK, status);
         var items = body.GetProperty("data").GetProperty("items").EnumerateArray()
             .ToDictionary(i => i.GetProperty("key").GetString()!);
         Assert.Equal("1", items["alert_enabled"].GetProperty("value").GetString());
         Assert.Equal("20", items["alert_login_fail_count"].GetProperty("value").GetString());
+        Assert.Equal("30", items["autoban_fail_count"].GetProperty("value").GetString());
 
         await using var db = CreateDb();
         var cfg = db.ServerConfig.AsNoTracking().ToDictionary(c => c.Key, c => c.Value);
         Assert.Equal("1", cfg["alert_enabled"]); // 持久化（AlertPusher 下 tick 现读生效）
         Assert.Equal("http://192.168.1.10:8080/hook", cfg["alert_webhook_url"]);
+        Assert.Equal("30", cfg["autoban_fail_count"]);
     }
 
     [Fact]

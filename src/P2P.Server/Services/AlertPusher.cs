@@ -14,6 +14,9 @@ namespace P2P.Server.Services;
 /// 每 tick 现读 alert_* 七键（PUT 后 ≤30s 生效，不占 RestartKeys）；每类型静默窗内不重复推送
 /// （阈值持续满足也静默）；推送失败下轮重试 ≤3 轮后丢弃+Serilog 日志（不入审计——高频非管理动作），
 /// 全程在 HostedService 后台线程不触业务路径。窗口计数皆内存环形（告警基线随重启重置，与 §11 同口径）。
+/// M5-08 起本 tick 兼载自动封禁判定（07 §13.3）：与 alert_enabled 开关独立——LoginThrottle IP 维
+/// 快照（autoban_window_sec 窗）count ≥ autoban_fail_count → BlacklistStore.AddAuto（新入列才落
+/// ip_auto_block 审计；autoban_enabled=0 只关判定，既有条目不受影响）。
 /// </summary>
 public sealed class AlertPusher(
     IDbContextFactory<AppDbContext> dbFactory,
@@ -21,8 +24,10 @@ public sealed class AlertPusher(
     RegistrationMetrics registrationMetrics,
     TimeProvider? time = null,
     StunService? stun = null,
+    BlacklistStore? blacklist = null,
     HttpClient? http = null,
-    ILogger<AlertPusher>? logger = null) : BackgroundService
+    ILogger<AlertPusher>? logger = null,
+    AuditLogger? audit = null) : BackgroundService
 {
     public const string Schema = "p2p.alert/v1";
     public const string TypeLoginFailBurst = "login_fail_burst";
@@ -59,6 +64,8 @@ public sealed class AlertPusher(
     {
         // STUN 增量采样先于开关判定（连续性：关闭期间丢包计入恢复后首个窗口，基线不漂）
         SampleStun();
+        // 自动封禁判定独立于告警开关（07 §13.3：autoban_enabled 只关判定，与本通道 alert_enabled 无关）
+        await EvaluateAutobanAsync(ct).ConfigureAwait(false);
 
         var cfg = await ReadConfigAsync(ct);
         if (!cfg.Enabled || cfg.Url.Length == 0) return;
@@ -112,6 +119,29 @@ public sealed class AlertPusher(
     {
         try { await TickOnceAsync(ct).ConfigureAwait(false); }
         catch (Exception ex) { _log?.LogWarning(ex, "AlertPusher 单轮判定异常（忽略，下轮重评）"); }
+    }
+
+    /// <summary>自动封禁判定（M5-08/SEC-73、07 §13.3）：LoginThrottle IP 维共享数据源——
+    /// autoban_* 四键现读，窗内失败 ≥ N → AddAuto（封 duration）；仅新入列落 ip_auto_block
+    /// （detail: ip/fails/windowSec——刷新与被 manual 压制不重复记，BlacklistStore 返回值承载）。</summary>
+    private async Task EvaluateAutobanAsync(CancellationToken ct)
+    {
+        if (blacklist is null) return;
+        bool enabled;
+        int windowSec, failCount, durationSec;
+        await using (var db = await dbFactory.CreateDbContextAsync(ct).ConfigureAwait(false))
+        {
+            var cfg = new ServerConfigStore(db);
+            enabled = cfg.GetBool("autoban_enabled");
+            windowSec = cfg.GetInt("autoban_window_sec");
+            failCount = cfg.GetInt("autoban_fail_count");
+            durationSec = cfg.GetInt("autoban_duration_sec");
+        }
+        if (!enabled) return;
+        foreach (var (ip, fails) in loginThrottle.SnapshotIpWindow(windowSec))
+            if (fails >= failCount && await blacklist.AddAutoAsync(ip, durationSec, ct).ConfigureAwait(false))
+                await (audit?.WriteAsync("ip_auto_block", detail: new { ip, fails, windowSec }, ct: ct)
+                    ?? Task.CompletedTask).ConfigureAwait(false);
     }
 
     /// <summary>alert_* 七键现读（每 tick 一次库查——管理页 PUT 后 ≤30s 生效）。</summary>

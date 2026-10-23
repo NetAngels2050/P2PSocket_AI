@@ -181,6 +181,10 @@ const CONFIG_DEFAULTS: Record<string, string> = {
   register_rate_per_ip: "10", // M5-02/SEC-61：单 IP 注册频控 次/h
   login_fail_window_sec: "900", // M5-04/SEC-63：登录防爆破滑动窗（PUT 热更即时生效）
   login_delay_cap_ms: "8000", // M5-04/SEC-63：登录延迟封顶 ms
+  autoban_enabled: "1", // M5-08/SEC-73：自动封禁判定开关（tick 现读；关判定不清条目）
+  autoban_window_sec: "600", // M5-08：判定滑动窗（LoginThrottle IP 维共享源）
+  autoban_fail_count: "20", // M5-08：窗内失败阈值
+  autoban_duration_sec: "3600", // M5-08：auto 条目时长
   alert_enabled: "0", // M5-07/SEC-71：暂无接收端默认关（即时生效）
   alert_webhook_url: "",
   alert_window_sec: "300",
@@ -407,6 +411,7 @@ export function createServerHandlers(state: MockServerState) {
         stun_auth: ["0", "1"],
         device_registration_open: ["0", "1"],
         alert_enabled: ["0", "1"],
+        autoban_enabled: ["0", "1"],
         default_join_policy: ["free", "approval"],
         log_level: ["Trace", "Debug", "Information", "Warning", "Error", "Fatal"],
       };

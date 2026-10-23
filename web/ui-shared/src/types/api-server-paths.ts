@@ -1,5 +1,5 @@
 // 本文件由 export-ts 反射生成（06 §5、08 §2③），禁止手改；
-// 源：ServerWebHost 服务端 Web 路由表（src/Tools/ExportTs @ 2026-10-22T16:23:49Z）。前端禁止手写 API 字符串路径。
+// 源：ServerWebHost 服务端 Web 路由表（src/Tools/ExportTs @ 2026-10-22T16:53:39Z）。前端禁止手写 API 字符串路径。
 
 export const ServerApiPaths = {
   AuditLogs: "/api/audit-logs",
@@ -21,6 +21,8 @@ export const ServerApiPaths = {
   RelayConfig: "/api/relay/config",
   RelaySessions: "/api/relay/sessions",
   SecurityAlertTest: "/api/security/alert-test",
+  SecurityBlacklist: "/api/security/blacklist",
+  SecurityBlacklistByIp: "/api/security/blacklist/{ip}",
   SystemConfig: "/api/system/config",
   Users: "/api/users",
   UsersByIdDisable: "/api/users/{id}/disable",
@@ -52,6 +54,8 @@ export const ServerApiEndpoints = [
   { path: "/api/relay/config", methods: ["PUT"] },
   { path: "/api/relay/sessions", methods: ["GET"] },
   { path: "/api/security/alert-test", methods: ["POST"] },
+  { path: "/api/security/blacklist", methods: ["POST"] },
+  { path: "/api/security/blacklist/{ip}", methods: ["DELETE"] },
   { path: "/api/system/config", methods: ["GET"] },
   { path: "/api/system/config", methods: ["PUT"] },
   { path: "/api/users", methods: ["GET"] },

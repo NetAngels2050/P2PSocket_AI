@@ -18,6 +18,7 @@ public sealed class ControlServer : IAsyncDisposable
     private readonly Func<ControlSession, IPcpMessage, Task> _dispatcher;
     private readonly ControlSessionOptions _options;
     private readonly TimeProvider _time;
+    private readonly BlacklistStore? _blacklist; // M5-08：accept 闸（07 §13.3）
     private readonly ConcurrentDictionary<ControlSession, byte> _sessions = new(); // 停机时统一关闭
 
     private TcpListener? _listener;
@@ -26,13 +27,15 @@ public sealed class ControlServer : IAsyncDisposable
 
     public ControlServer(IDbContextFactory<AppDbContext> dbFactory, DeviceRegistry registry,
         Func<ControlSession, IPcpMessage, Task> dispatcher,
-        ControlSessionOptions? options = null, TimeProvider? time = null)
+        ControlSessionOptions? options = null, TimeProvider? time = null,
+        BlacklistStore? blacklist = null)
     {
         _dbFactory = dbFactory;
         _registry = registry;
         _dispatcher = dispatcher;
         _options = options ?? new ControlSessionOptions();
         _time = time ?? TimeProvider.System;
+        _blacklist = blacklist;
     }
 
     /// <summary>安全断连累计（HMAC 校验失败/seq 回退；SEC-22 观测）。</summary>
@@ -68,6 +71,13 @@ public sealed class ControlServer : IAsyncDisposable
             catch (SocketException) { break; }       // Stop 后套接字关闭
             catch (ObjectDisposedException) { break; }
             client.NoDelay = true; // 02 §2.1：控制信道低延迟优先
+            // M5-08 IP 黑名单（07 §13.3）：accept 后立即（会话创建前，与 §12 并发闸同点）——立即关闭
+            if (_blacklist?.IsBlocked(((IPEndPoint)client.Client.RemoteEndPoint!).Address.ToString()) == true)
+            {
+                _blacklist.CountHit(BlacklistStore.FaceControl);
+                client.Close();
+                continue;
+            }
             var session = new ControlSession(client.GetStream(), _dbFactory, _registry, _dispatcher,
                 _options, _time, () => Interlocked.Increment(ref _hmacFailures),
                 (IPEndPoint)client.Client.RemoteEndPoint!, (IPEndPoint)client.Client.LocalEndPoint!);

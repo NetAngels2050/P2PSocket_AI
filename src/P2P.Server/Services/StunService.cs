@@ -36,6 +36,7 @@ public sealed class StunService : IAsyncDisposable
     private readonly Task _sweeper;
     private readonly IPEndPoint? _alt; // 配置的辅端点（地址=通告 IP；端口 0=UDP 随机 TCP 跟随）
     private readonly IPAddress? _advertisedIp; // 主侧通告 IP：public_addr（M2-36 同语义）优先，空=按对端路由派生
+    private readonly BlacklistStore? _blacklist; // M5-08：UDP 到达/TCP accept 闸（07 §13.3）
     private UdpClient _udp = null!;
     private TcpListener _tcpListener = null!;
     private UdpClient? _altUdp;
@@ -49,13 +50,15 @@ public sealed class StunService : IAsyncDisposable
     private int _disposed; // 宿主 StopAsync 与容器释放各调一次（幂等）
 
     public StunService(IDbContextFactory<AppDbContext> dbFactory, bool requireAuth = true,
-        TimeProvider? time = null, StunGuardOptions? guard = null, IPEndPoint? alt = null)
+        TimeProvider? time = null, StunGuardOptions? guard = null, IPEndPoint? alt = null,
+        BlacklistStore? blacklist = null)
     {
         _dbFactory = dbFactory;
         _requireAuth = requireAuth;
         _time = time ?? TimeProvider.System;
         _guard = new StunGuard(guard, _time);
         _alt = alt;
+        _blacklist = blacklist;
         if (alt is not null)
         {
             // 主侧通告 IP：public_addr 是 IP 时直接采用（云 NAT 部署派生会得内网地址，M2-36 同问题域）；
@@ -139,6 +142,12 @@ public sealed class StunService : IAsyncDisposable
 
     private async Task HandleAsync(UdpReceiveResult datagram)
     {
+        // M5-08 IP 黑名单（07 §13.3）：先于四道闸④①②③——静默丢弃
+        if (_blacklist?.IsBlocked(datagram.RemoteEndPoint.Address.ToString()) == true)
+        {
+            _blacklist.CountHit(BlacklistStore.FaceStun);
+            return;
+        }
         var wire = datagram.Buffer;
         if (wire.Length < StunCodec.HeaderLen) return;
 
@@ -167,6 +176,12 @@ public sealed class StunService : IAsyncDisposable
     /// 正常从辅回包——OTHER-ADDRESS 相对语义=通告主端点（RFC5780：辅 socket 即"另一端点"视角）。</summary>
     private async Task HandleAltAsync(UdpReceiveResult datagram)
     {
+        // M5-08 IP 黑名单（07 §13.3）：先于四道闸④①②③——静默丢弃（与主监听同闸）
+        if (_blacklist?.IsBlocked(datagram.RemoteEndPoint.Address.ToString()) == true)
+        {
+            _blacklist.CountHit(BlacklistStore.FaceStun);
+            return;
+        }
         var wire = datagram.Buffer;
         if (wire.Length < StunCodec.HeaderLen) return;
 
@@ -236,6 +251,13 @@ public sealed class StunService : IAsyncDisposable
     private async Task ServeTcpAsync(Socket conn, bool fromAlt, CancellationToken ct)
     {
         var remote = (IPEndPoint)conn.RemoteEndPoint!;
+        // M5-08 IP 黑名单（07 §13.3）：accept 后立即关闭（闸④①②③ 之前）
+        if (_blacklist?.IsBlocked(remote.Address.ToString()) == true)
+        {
+            _blacklist.CountHit(BlacklistStore.FaceStun);
+            conn.Dispose();
+            return;
+        }
         if (!_guard.AdmitArrival()) { conn.Dispose(); return; }
         if (!_guard.TryAcquireTcp(remote.Address)) { conn.Dispose(); return; }
         try

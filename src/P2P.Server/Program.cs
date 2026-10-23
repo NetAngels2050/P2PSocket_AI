@@ -137,6 +137,9 @@ builder.Services.AddSingleton<GroupService>();
 // 钩子件；AlertPusher 每 tick 现读 alert_* 七键（PUT 后 ≤30s 生效不占 RestartKeys），依赖 LoginThrottle
 // （IP 维聚合）/RegistrationMetrics/StunService（丢弃增量）——单例注册后 HostedService 复用同实例
 builder.Services.AddSingleton<RegistrationMetrics>();
+// M5-08/SEC-73 IP 黑名单单例（07 §13.3）：ctor 读隐藏键 ip_blacklist 恢复；四面
+// （ControlServer/Stun/Relay/Web 中间件）+ AlertPusher 自动封禁判定 + SecurityApi 编辑面共用
+builder.Services.AddSingleton<BlacklistStore>();
 builder.Services.AddSingleton<AlertPusher>();
 builder.Services.AddSingleton<MappingService>();
 // 0x63 内网段白名单（M2-11，FR-C-701/702）：段 CRUD + 移除联动 0x75 失效推送
@@ -181,7 +184,8 @@ builder.Services.AddSingleton(sp =>
             IdleTimeout = TimeSpan.FromSeconds(options.Relay.IdleTimeoutSec),
             PublicHost = cfg.Get("public_addr"),
         },
-        rateLimiter: sp.GetRequiredService<RelayRateLimiter>());
+        rateLimiter: sp.GetRequiredService<RelayRateLimiter>(),
+        blacklist: sp.GetRequiredService<BlacklistStore>()); // M5-08：JOIN 前/accept 闸（07 §13.3）
 });
 builder.Services.AddSingleton<ControlMessageRouter>();
 // 上报族处理器（M2-08）：0x62 审计 / 0x64 mapping_stats / 0x72 落库在 SignalingCoordinator；
@@ -193,7 +197,8 @@ builder.Services.AddSingleton(sp => new RetentionCleaner(
 builder.Services.AddSingleton(sp => new ControlServer(
     sp.GetRequiredService<IDbContextFactory<AppDbContext>>(),
     sp.GetRequiredService<DeviceRegistry>(),
-    sp.GetRequiredService<ControlMessageRouter>().DispatchAsync));
+    sp.GetRequiredService<ControlMessageRouter>().DispatchAsync,
+    blacklist: sp.GetRequiredService<BlacklistStore>()));
 // stun_auth 与三速率键是库开关（03 §2.8）：首次解析发生在 ServerHostService.StartAsync 步骤③
 // （晚于数据库初始化，键必然存在；stun_rate_per_ip/per_device/circuit_pps 为四道闸 TD-18 参数）；
 // stun_alt_addr（M3-15）：STUN 辅端点（RFC5780 判型，空=单 IP 降级）——StunService ctor 内
@@ -208,7 +213,8 @@ builder.Services.AddSingleton(sp =>
         PerIpPps = cfg.GetInt("stun_rate_per_ip"),
         PerDeviceQps = cfg.GetInt("stun_rate_per_device"),
         CircuitPps = cfg.GetInt("stun_circuit_pps"),
-    }, alt: ParseAltEndpoint(cfg.Get("stun_alt_addr")));
+    }, alt: ParseAltEndpoint(cfg.Get("stun_alt_addr")),
+    blacklist: sp.GetRequiredService<BlacklistStore>()); // M5-08：UDP 到达/TCP accept 闸（07 §13.3）
 });
 builder.Services.AddHostedService<ServerHostService>();
 // M3-01/02 服务端 Web 后台（04 §3、D11 仅本机监听）：注册于 ServerHostService 之后 ⇒

@@ -12,6 +12,7 @@ using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using P2P.Client.Control;
 using P2P.Client.Mapping;
@@ -66,7 +67,8 @@ var serverAdmin = new AdminService(serverDb, serverRegistry, serverAudit, server
 var serverApp = ServerWebHostService.Build(new P2P.Server.ServerOptions(),
     TimeProvider.System, new AdminSessionStore(TimeProvider.System),
     serverDb, serverAudit, serverAdmin, serverRegistry, serverGroups,
-    alertPusher: new AlertPusher(serverDb, new LoginThrottle(), new RegistrationMetrics()));
+    alertPusher: new AlertPusher(serverDb, new LoginThrottle(), new RegistrationMetrics()),
+    blacklist: new BlacklistStore(serverDb)); // M5-08：blacklist 增删端点入路径常量
 
 // ② 路由表（真实注册代码产出；{id:guid} 约束归一为 {id}；/ws/* 无 HTTP 方法元数据单列）
 //    注：未 Start 的 WebApplication 须从 IEndpointRouteBuilder.DataSources 直取（DI 侧 DataSource 未定稿）
@@ -371,11 +373,21 @@ internal static partial class TsGen // 生成逻辑集中（顶层语句宿主�
     }
 }
 
-/// <summary>服务端路由装配的占位库工厂（内存 Sqlite；端点注册不触库）。</summary>
+/// <summary>服务端路由装配的占位库工厂（内存 Sqlite 共享连接——M5-08 起 BlacklistStore ctor
+/// 读隐藏键恢复触库，须有表：单连接保内存库存活+EnsureCreated 建模）。</summary>
 internal sealed class ExportTsDbFactory : IDbContextFactory<AppDbContext>
 {
+    private readonly SqliteConnection _conn = new("DataSource=:memory:");
+
+    public ExportTsDbFactory()
+    {
+        _conn.Open();
+        using var db = CreateDbContext();
+        db.Database.EnsureCreated();
+    }
+
     public AppDbContext CreateDbContext() => new(
-        new DbContextOptionsBuilder<AppDbContext>().UseSqlite("DataSource=:memory:").Options);
+        new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_conn).Options);
 }
 
 /// <summary>打洞器空实现（仅装配路由，永不调用）。</summary>

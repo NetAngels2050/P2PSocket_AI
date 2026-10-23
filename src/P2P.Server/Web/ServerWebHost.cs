@@ -35,7 +35,8 @@ public sealed class ServerWebHostService(
     StunService? stun = null,
     RelayRateLimiter? limiter = null,
     LoginThrottle? loginThrottle = null,
-    AlertPusher? alertPusher = null) : IHostedService
+    AlertPusher? alertPusher = null,
+    BlacklistStore? blacklist = null) : IHostedService
 {
     private WebApplication? _app;
 
@@ -45,7 +46,7 @@ public sealed class ServerWebHostService(
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _app = Build(options, time, sessions, dbFactory, audit, admin, registry, groups, relay, stun,
-            limiter, WebRootOverride, loginThrottle, alertPusher);
+            limiter, WebRootOverride, loginThrottle, alertPusher, blacklist);
         await _app.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -60,7 +61,7 @@ public sealed class ServerWebHostService(
         AdminService admin, DeviceRegistry registry, GroupService groups,
         RelayService? relay = null, StunService? stun = null, RelayRateLimiter? limiter = null,
         string? webRootOverride = null, LoginThrottle? loginThrottle = null,
-        AlertPusher? alertPusher = null)
+        AlertPusher? alertPusher = null, BlacklistStore? blacklist = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls($"http://{options.Listen.WebBind}:{options.Listen.Web}");
@@ -88,8 +89,26 @@ public sealed class ServerWebHostService(
         new AdminMappingsApi(dbFactory).Map(app);
         new AdminSystemApi(dbFactory, limiter, audit, loginThrottle).Map(app);
         new AdminAuditLogsApi(dbFactory).Map(app);
-        // M5-07 安全中心首件（04 §3.2）：alert-test 立即发 type=test（M5-09 overview/blacklist 随任务挂）
-        if (alertPusher is not null) new SecurityApi(dbFactory, alertPusher).Map(app);
+        // M5-07/08 安全中心端点组（04 §3.2）：alert-test（M5-07）+ blacklist 增删（M5-08，
+        // 07 §13.3——处置审计 ip_block/ip_unblock）；M5-09 overview/lockdown 随任务挂载
+        if (blacklist is not null || alertPusher is not null)
+            new SecurityApi(dbFactory, audit, blacklist, alertPusher).Map(app);
+
+        // M5-08 IP 黑名单中间件（07 §13.3）：全端点、认证之前——被封 IP 一切端点 403 {2003 FORBIDDEN}
+        // （含 /api/auth/login：连登录面一并拒，防止绕面探测）；命中只计数不审计（OQ-22①）
+        if (blacklist is not null)
+            app.Use(async (ctx, next) =>
+            {
+                var ip = ctx.Connection.RemoteIpAddress?.ToString();
+                if (ip is not null && blacklist.IsBlocked(ip))
+                {
+                    blacklist.CountHit(BlacklistStore.FaceWeb);
+                    ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    await ctx.Response.WriteAsJsonAsync(new { code = 2003, message = "IP 已被封禁" });
+                    return;
+                }
+                await next();
+            });
 
         // 认证骨架（04 §3.1/§3.2、07 §8）：/api/* 须携带有效会话 Cookie，否则 401 {code:2001}；
         // /api/auth/login 白名单（登录端点 M3-02 挂载）。静态页（SPA 外壳）不经认证——前端路由接管。

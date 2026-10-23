@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// M3-11 系统配置与审计页（06 §3、FR-S-825、NFR-54）：server_config 白名单 30 键键值编辑表格
+// M3-11 系统配置与审计页（06 §3、FR-S-825、NFR-54）：server_config 白名单 34 键键值编辑表格
 // （按类型控件：开关 bool/枚举 select/数值 input-number/文本——行级保存 PUT 单键，服务端
 // 全量校验整单拒绝 400{1001} 前端显示错误）+重启生效提示 tag+审计日志（event 过滤+分页
 // newest-first，detail 原始 JSON 文本截断透传）。
@@ -30,6 +30,10 @@ const KEY_META: Record<string, { label: string; type: "bool" | "select" | "numbe
   register_rate_per_ip: { label: "注册频控（次/h/IP）", type: "number" }, // M5-02（重启生效）
   login_fail_window_sec: { label: "登录失败滑动窗（秒）", type: "number" }, // M5-04/SEC-63（即时生效）
   login_delay_cap_ms: { label: "登录延迟封顶（ms）", type: "number" }, // M5-04/SEC-63（即时生效）
+  autoban_enabled: { label: "自动封禁", type: "bool" }, // M5-08/SEC-73（即时生效——tick 现读；关判定不清条目）
+  autoban_window_sec: { label: "自动封禁判定窗（秒）", type: "number" }, // M5-08 与 LoginThrottle IP 维共享源
+  autoban_fail_count: { label: "自动封禁阈值（次）", type: "number" }, // M5-08 窗内失败达即封
+  autoban_duration_sec: { label: "自动封禁时长（秒）", type: "number" }, // M5-08 auto 条目过期自愈
   alert_enabled: { label: "安全告警", type: "bool" }, // M5-07/SEC-71（即时生效——每 tick 现读）
   alert_webhook_url: { label: "告警 Webhook", type: "text" }, // M5-07（http/https 均可）
   alert_window_sec: { label: "告警窗口（秒）", type: "number" }, // M5-07 三类触发共用

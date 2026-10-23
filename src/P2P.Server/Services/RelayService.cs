@@ -75,11 +75,12 @@ public sealed class RelayService : IAsyncDisposable
     private int _disposed; // 宿主 StopAsync 与容器释放各调一次（幂等）
 
     private readonly RelayRateLimiter? _rateLimiter; // TD-23 全局字节率令牌桶（M3-07；null=不限）
+    private readonly BlacklistStore? _blacklist; // M5-08：UDP 到达/TCP accept 闸（07 §13.3）
 
     public RelayService(IDbContextFactory<AppDbContext> dbFactory, DeviceRegistry registry,
         Func<Guid, (Guid InitiatorId, Guid TargetId)?>? peerResolver = null,
         RelayServiceOptions? options = null, TimeProvider? time = null,
-        RelayRateLimiter? rateLimiter = null)
+        RelayRateLimiter? rateLimiter = null, BlacklistStore? blacklist = null)
     {
         _dbFactory = dbFactory;
         _registry = registry;
@@ -87,6 +88,7 @@ public sealed class RelayService : IAsyncDisposable
         _options = options ?? new RelayServiceOptions();
         _time = time ?? TimeProvider.System;
         _rateLimiter = rateLimiter;
+        _blacklist = blacklist;
         _startedUtc = _time.GetLocalNow().UtcDateTime;
         _reaper = ReaperAsync(_cts.Token);
     }
@@ -232,6 +234,12 @@ public sealed class RelayService : IAsyncDisposable
 
     private async Task HandleUdpAsync(UdpReceiveResult datagram)
     {
+        // M5-08 IP 黑名单（07 §13.3）：JOIN 解析前按源 IP——静默丢弃
+        if (_blacklist?.IsBlocked(datagram.RemoteEndPoint.Address.ToString()) == true)
+        {
+            _blacklist.CountHit(BlacklistStore.FaceRelay);
+            return;
+        }
         var wire = datagram.Buffer;
         var from = datagram.RemoteEndPoint;
 
@@ -302,6 +310,12 @@ public sealed class RelayService : IAsyncDisposable
         {
             var stream = client.GetStream();
             var remote = (IPEndPoint)client.Client.RemoteEndPoint!;
+            // M5-08 IP 黑名单（07 §13.3）：首帧 JOIN 前按源 IP——立即关闭
+            if (_blacklist?.IsBlocked(remote.Address.ToString()) == true)
+            {
+                _blacklist.CountHit(BlacklistStore.FaceRelay);
+                return;
+            }
             using (var joinCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
                 joinCts.CancelAfter(JoinTimeout);

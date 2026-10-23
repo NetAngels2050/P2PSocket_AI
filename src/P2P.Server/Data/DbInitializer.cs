@@ -30,6 +30,10 @@ public static class DbInitializer
         ("register_rate_per_ip", "10"),    // M5-02/SEC-61：单 IP 注册频控 次/h（启动期读入 RegistrationGuard）
         ("login_fail_window_sec", "900"),  // M5-04/SEC-63：登录防爆破滑动窗（PUT 热更联动 LoginThrottle）
         ("login_delay_cap_ms", "8000"),    // M5-04/SEC-63：递增延迟封顶 ms（同上）
+        ("autoban_enabled", "1"),          // M5-08/SEC-73：自动封禁判定开关（AlertPusher tick 现读，07 §13.3）
+        ("autoban_window_sec", "600"),     // M5-08：判定滑动窗（与 LoginThrottle IP 维共享数据源）
+        ("autoban_fail_count", "20"),      // M5-08：窗内失败阈值（达即加 auto 条目）
+        ("autoban_duration_sec", "3600"),  // M5-08：auto 条目时长（过期自愈）
         // M5-07/SEC-71：告警通道（AlertPusher 每 tick 现读——PUT 后 ≤30s 生效，不占 RestartKeys）
         ("alert_enabled", "0"),            // OQ-21③：暂无接收端默认关；配 URL 后手动开
         ("alert_webhook_url", ""),         // 通用 JSON p2p.alert/v1（http/https 均可——可指向内网网关）
