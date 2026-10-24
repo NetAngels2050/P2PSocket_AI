@@ -38,7 +38,32 @@ jobs:
           pnpm -C web --filter @p2p/client-app --filter @p2p/server-app build
 
       - name: dotnet test 全仓（08 §2）
-        run: dotnet test AI-P2P.sln -c Release --no-build
+        run: dotnet test AI-P2P.sln -c Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory test-results
+
+      # 失败自助排障（2026-10-24）：TRX 解析失败用例 → ::error 注解（注解经匿名 API 可读——
+      # 当日连续多轮 CI 失败仅凭 job 日志排障需人工转贴，注解携带用例名+消息后免转贴）
+      - name: 失败用例提取 → CI 注解
+        if: failure()
+        run: |
+          python3 - <<'EOF'
+          import glob, re, html
+          seen = set()
+          for f in glob.glob('test-results/*.trx'):
+              t = open(f, encoding='utf-8').read()
+              for m in re.finditer(r'<UnitTestResult[^>]*testName="([^"]+)"[^>]*outcome="Failed"[^>]*>(.*?)</UnitTestResult>', t, re.S):
+                  name, body = m.group(1), m.group(2)
+                  if name in seen: continue
+                  seen.add(name)
+                  msg = re.search(r'<Message>(.*?)</Message>', body, re.S)
+                  text = html.unescape(msg.group(1)).strip().replace('\n', ' ')[:200] if msg else ''
+                  print(f"::error title=测试失败::{name}: {text}")
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: test-results
 
       # M1-36：coverlet.collector 的 runsettings Threshold 经两法验证不拦运行
       # （--collect 与 -s 并用仍 0 退出），故门槛为显式解析 cobertura 根 line-rate。
