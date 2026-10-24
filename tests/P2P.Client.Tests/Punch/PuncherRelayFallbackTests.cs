@@ -80,6 +80,41 @@ public sealed class PuncherRelayFallbackTests
     }
 
     [Fact]
+    public async Task 承载回退_TCP承载JOIN超时OCE_转UDP兜底成功()
+    {
+        // 2026-10-24 公网实证缺陷（712152↔133102）：移动 CGNAT 对 7020/TCP DROP 型封锁——
+        // TCP 承载 JOIN 挂满 DefaultJoinTimeout 抛 OperationCanceledException，旧过滤器仅接
+        // IOException/SocketException 致 OCE 穿透、UDP 兜底永不触发、中继整败。
+        // 回环投影：TCP 可连但首帧 [0x02] 无应答（等价「应用层被丢」；CGNAT 的 SYN 级丢弃
+        // 表现为 ConnectAsync 阶段同型 OCE，同一过滤器缺陷）→ joinTimeout 到 → 须转 UDP 命中
+        var tcpListener = new TcpListener(IPAddress.Loopback, 0);
+        tcpListener.Start(1); // 收连接（backlog 完成 3WHS）但永不回 JOIN 确认
+        var tcpPort = ((IPEndPoint)tcpListener.LocalEndpoint!).Port;
+
+        using var udp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var udpPort = ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
+        var udpAcked = Task.Run(async () =>
+        {
+            var got = await udp.ReceiveAsync();
+            await udp.SendAsync(new byte[] { RelayTransportJoinAck }.AsMemory(), got.RemoteEndPoint);
+        });
+
+        var grant = new RelayGrant(1, 0, MsgType.RelayAllocate, 0x5A5A5A5A,
+            new EndpointPair(
+                new P2P.Core.Protocol.Endpoint("127.0.0.1", (ushort)udpPort),
+                new P2P.Core.Protocol.Endpoint("127.0.0.1", (ushort)tcpPort)));
+
+        // 修复前：TCP JOIN 的 OCE 穿透（测试在此抛 TaskCanceledException）；修复后：转 UDP 即刻命中
+        await using var transport = await RelayClient.JoinWithCarrierFallbackAsync(grant,
+            joinTimeout: TimeSpan.FromMilliseconds(400));
+        Assert.Equal(udpPort, transport.RemoteEndPoint!.Port); // 数据面端点=UDP（兜底承载已建立）
+        await udpAcked.WaitAsync(TimeSpan.FromSeconds(2));     // UDP 侧确实收到 JOIN 并应答
+        tcpListener.Stop();
+    }
+
+    private const byte RelayTransportJoinAck = 0x02; // 与 RelayTransport.JoinAckPrefix 同值（测试侧独立常量）
+
+    [Fact]
     public async Task 分配缝未装_资格真也不尝试回退_纯打洞失败()
     {
         using var staticKey = EcKeyPair.Generate();

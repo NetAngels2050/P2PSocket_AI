@@ -44,7 +44,10 @@ public static class RelayClient
     /// 应用收不满 Content-Length 卡死）或丢 WINDOW 信用回报（M2-21 发送侧信用耗尽永久挂起）、
     /// OPEN 控制帧丢失（连接即断）；单流轻载丢包率低不易察觉，多 channel 并发 burst 放大。
     /// TCP 承载内核重传彻底消除丢帧面，代价仅拥塞控制自适应（中继场景可靠性 > 峰值速率）。
-    /// 外部取消（ct）不吞——传播给调用方。</summary>
+    /// JOIN 内部超时的 OCE（ct 未取消——ConnectAsync 或首帧应答挂满 joinTimeout）视同承载
+    /// 不可用转 UDP 兜底（2026-10-24 公网实证：移动 CGNAT 对 7020/TCP DROP 型封锁——非 RST，
+    /// 旧过滤器仅接 IOException/SocketException 致 OCE 穿透、UDP 兜底永不触发、中继整败，
+    /// 「relay_failed: The operation was canceled」即此）。外部取消（ct）不吞——传播给调用方。</summary>
     public static async Task<RelayTransport> JoinWithCarrierFallbackAsync(RelayGrant grant,
         TimeSpan? joinTimeout = null, TimeProvider? time = null, CancellationToken ct = default)
     {
@@ -52,7 +55,9 @@ public static class RelayClient
         {
             return await RelayTransport.JoinAsync(grant, RelayCarrier.Tcp, joinTimeout, time, ct).ConfigureAwait(false);
         }
-        catch (Exception e) when ((e is IOException or SocketException) && !ct.IsCancellationRequested)
+        catch (Exception e) when (!ct.IsCancellationRequested
+            && (e is IOException or SocketException
+                || e is OperationCanceledException)) // JOIN 内部超时（DROP 型封锁）：转 UDP 兜底
         {
             // TCP 承载不可用：转 UDP 兜底（留待下方重试；此处不吞外部取消）
         }
