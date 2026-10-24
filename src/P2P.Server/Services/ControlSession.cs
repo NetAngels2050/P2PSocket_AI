@@ -49,6 +49,10 @@ public sealed class ControlSession : IAsyncDisposable
     private Guid _deviceId;
     private bool _hmacEnabled;       // Established 后除 Register（NeedRegister 阶段）外全部签名
     private int _closed;
+    // M2-13 双推闩（2026-10-24 维护期加固）：user_disabled/device_disabled 同会话同事件至多一推
+    private readonly Lock _announceGate = new();
+    private int _userDisabledAnnounced;
+    private Guid _deviceDisabledAnnounced; // 键=目标设备 id（异目标互不吞）
     private CancellationTokenSource _cts = new();
     private readonly Task _runLoop;
     private readonly Task _sendLoop;
@@ -472,6 +476,33 @@ public sealed class ControlSession : IAsyncDisposable
         _hmacEnabled = true;
         _state = SessionState.Established;
         _registry.Register(this);
+    }
+
+    /// <summary>M2-13 双推闩（2026-10-24 维护期加固）：user_disabled/device_disabled 的进程内
+    /// 即时路径（AdminService）与 PresenceMonitor 兜底扫描存在「写库后/内存降级前」竞态窗，
+    /// 同载荷 0x75 可双推（客户端消费幂等为既有设计口径，此处收敛为一次）。user 维键=reason
+    /// （会话属主唯一且被动态持续至重连——二次推送载荷恒同）；device 维键=被禁目标设备 id。
+    /// 边界：device 维同目标 disable→enable→（owner 重启用映射）→再 disable 的二次宣告被吞——
+    /// 该形态自愈于首次使用（授权查 target disabled 拒绝→映射 failed）；重连即新会话新闩。
+    /// 其余 reason 不入闩（默认放行）。</summary>
+    public bool TryAnnounceInvalidationOnce(InvalidationReason reason, Guid subjectDeviceId)
+    {
+        lock (_announceGate)
+        {
+            switch (reason)
+            {
+                case InvalidationReason.UserDisabled:
+                    if (_userDisabledAnnounced == 1) return false;
+                    _userDisabledAnnounced = 1;
+                    return true;
+                case InvalidationReason.DeviceDisabled:
+                    if (_deviceDisabledAnnounced == subjectDeviceId) return false;
+                    _deviceDisabledAnnounced = subjectDeviceId;
+                    return true;
+                default:
+                    return true;
+            }
+        }
     }
 
     public async Task CloseAsync(string? reason)

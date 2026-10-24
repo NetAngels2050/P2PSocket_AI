@@ -26,6 +26,7 @@ public sealed class AdminServiceTests : IAsyncLifetime
     private RelayService _relay = null!;
     private PresenceMonitor _monitor = null!;
     private AdminService _admin = null!;
+    private InvalidationPusher _invalidation = null!; // 0x75（M2-12）——双推闩用例直推入口
 
     public Task InitializeAsync()
     {
@@ -36,22 +37,22 @@ public sealed class AdminServiceTests : IAsyncLifetime
         var audit = new AuditLogger(factory);
         _signaling = new SignalingCoordinator(factory, _registry, new Authorizer(factory), audit);
         _relay = new RelayService(factory, _registry, _signaling.ResolveRelayPeers);
-        var invalidation = new InvalidationPusher(factory, _registry); // 0x75（M2-12）
+        _invalidation = new InvalidationPusher(factory, _registry); // 0x75（M2-12）
         var pusher = new DeviceListPusher(factory, _registry);         // 0x41（帧序交错源）
         var router = new ControlMessageRouter(
-            new RegistrationService(factory, _registry, audit, invalidation: invalidation, listPusher: pusher),
-            new UserService(factory, audit, invalidation: invalidation),
-            new GroupService(factory, _registry, audit, pusher, invalidation),
+            new RegistrationService(factory, _registry, audit, invalidation: _invalidation, listPusher: pusher),
+            new UserService(factory, audit, invalidation: _invalidation),
+            new GroupService(factory, _registry, audit, pusher, _invalidation),
             _signaling,
             new MappingService(factory, audit),
             _relay,
             new StatsService(factory, audit),
             audit,
             new LanSegmentService(factory, _registry, audit));
-        _admin = new AdminService(factory, _registry, audit, invalidation);
+        _admin = new AdminService(factory, _registry, audit, _invalidation);
         // 心跳兜底（真时钟小间隔：跨进程写库窗口压至 ~200ms，覆盖 CLI 场景）
         _monitor = new PresenceMonitor(_registry, factory,
-            period: TimeSpan.FromMilliseconds(100), invalidation: invalidation,
+            period: TimeSpan.FromMilliseconds(100), invalidation: _invalidation,
             adminCheckInterval: TimeSpan.FromMilliseconds(100));
         _server = new ControlServer(factory, _registry, router.DispatchAsync);
         return _server.StartAsync(new IPEndPoint(IPAddress.Loopback, 0));
@@ -236,6 +237,52 @@ public sealed class AdminServiceTests : IAsyncLifetime
         await using var db = CreateDb();
         Assert.True(await db.WaitAuditAsync(x => x.Event == "user_disable"));
         Assert.True(await db.WaitAuditAsync(x => x.Event == "user_enable"));
+    }
+
+    // ── M2-13 双推闩（2026-10-24 维护期加固）：即时路径与兜底扫描同载荷 0x75 收敛为一次 ──
+
+    [Fact]
+    public async Task 双推闩_user_disabled_同会话同事件至多一推()
+    {
+        var (a, aId, _, _) = await RegisterAsync("latch-u");
+        var (b, bId, _, _) = await RegisterAsync("latch-t");
+        var mid = await CreateMappingAsync(a, await GetRemoteCodeAsync(bId), 18190);
+
+        // 竞态窗形态直接复现：即时路径（AdminService 同参）与兜底扫描（PresenceMonitor 同参）
+        // 先后各推一次——闩前=两帧同载荷，闩后=第二帧被吞
+        await _invalidation.PushOwnedAsync(aId, InvalidationReason.UserDisabled, CapabilityMode.Passive);
+        await _invalidation.PushOwnedAsync(aId, InvalidationReason.UserDisabled, CapabilityMode.Passive);
+
+        var inv = await a.ReceiveSkippingPushesAsync<Invalidation>();
+        Assert.Equal(InvalidationReason.UserDisabled, inv!.Reason);
+        Assert.Equal(new[] { mid }, inv.AffectedMappingIds);
+        await DrainPushesAsync(a); // 兼断言：第二条 0x75 若未被闩会在此撞出非 0x41 帧
+        Assert.Null(await a.ReceiveDescribeAsync(400)); // 静默窗：同事件不再有第二帧
+    }
+
+    [Fact]
+    public async Task 双推闩_device_disabled_同目标吞异目标放行()
+    {
+        var (a, _, _, _) = await RegisterAsync("latch-da");
+        var (_, xId, _, _) = await RegisterAsync("latch-dx");
+        var (_, yId, _, _) = await RegisterAsync("latch-dy");
+        var midX = await CreateMappingAsync(a, await GetRemoteCodeAsync(xId), 18191);
+        var midY = await CreateMappingAsync(a, await GetRemoteCodeAsync(yId), 18192);
+
+        // 同目标双推（即时路径+兜底扫描同参）：第二帧被闩
+        await _invalidation.PushTargetingAsync(xId, InvalidationReason.DeviceDisabled);
+        await _invalidation.PushTargetingAsync(xId, InvalidationReason.DeviceDisabled);
+
+        var inv1 = await a.ReceiveSkippingPushesAsync<Invalidation>();
+        Assert.Equal(InvalidationReason.DeviceDisabled, inv1!.Reason);
+        Assert.Equal(new[] { midX }, inv1.AffectedMappingIds);
+        await DrainPushesAsync(a);
+        Assert.Null(await a.ReceiveDescribeAsync(400)); // 同目标第二条被吞
+
+        // 异目标（y 被禁）：不同主体不互吞——照常推送
+        await _invalidation.PushTargetingAsync(yId, InvalidationReason.DeviceDisabled);
+        var inv2 = await a.ReceiveSkippingPushesAsync<Invalidation>();
+        Assert.Equal(new[] { midY }, inv2!.AffectedMappingIds);
     }
 
     // ── 解绑：删行 + 同 MAC 重注册全新身份（FR-S-103 收口）──────────────

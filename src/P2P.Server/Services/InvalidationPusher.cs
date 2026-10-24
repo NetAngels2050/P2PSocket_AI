@@ -27,7 +27,8 @@ public sealed class InvalidationPusher(
             .ToArrayAsync();
         if (ids.Length == 0 && newCapability is null)
             return; // 空集且无能力变化才静默；降级提示独立于映射集合（客户端要即时降级登录态）
-        await PushByOwnerAsync(new Dictionary<Guid, Guid[]> { [ownerDeviceId] = ids }, reason, newCapability);
+        await PushByOwnerAsync(new Dictionary<Guid, Guid[]> { [ownerDeviceId] = ids }, reason,
+            newCapability, subjectDeviceId: ownerDeviceId);
     }
 
     /// <summary>远程码重置（0x14，PRD 05 §5）：引用该设备的存量映射失效——码是定位别名（D7），
@@ -39,7 +40,7 @@ public sealed class InvalidationPusher(
             .Where(m => m.TargetDeviceId == targetDeviceId && m.Enabled)
             .GroupBy(m => m.OwnerDeviceId)
             .ToDictionaryAsync(g => g.Key, g => g.Select(m => m.Id).ToArray());
-        await PushByOwnerAsync(byOwner, reason);
+        await PushByOwnerAsync(byOwner, reason, subjectDeviceId: targetDeviceId);
     }
 
     /// <summary>组关系单边切断（0x52 自退 / 0x57 移出）：候选=切断边任一端为离开者的映射，
@@ -71,14 +72,20 @@ public sealed class InvalidationPusher(
             InvalidationReason.GroupDissolved);
     }
 
-    /// <summary>逐 owner 推送（已算好的集合）。</summary>
+    /// <summary>逐 owner 推送（已算好的集合）。subjectDeviceId=双推闩主体（07 §5：UserDisabled
+    /// 取 owner、DeviceDisabled 取被禁目标设备——见 ControlSession.TryAnnounceInvalidationOnce；
+    /// 其余 reason 不入闩不受此参影响）。</summary>
     public async Task PushByOwnerAsync(IReadOnlyDictionary<Guid, Guid[]> byOwner, InvalidationReason reason,
-        CapabilityMode? newCapability = null)
+        CapabilityMode? newCapability = null, Guid subjectDeviceId = default)
     {
         foreach (var (ownerId, ids) in byOwner)
         {
             if ((ids.Length == 0 && newCapability is null) || registry.TryGet(ownerId) is not { } session)
                 continue; // 离线跳过（提示帧语义）；降级提示允许空映射集
+            // M2-13 双推闩（2026-10-24 加固）：同类事件同会话/同目标至多一推——即时路径与
+            // 兜底扫描共用本入口，闩在此收敛（客户端幂等口径保留为纵深防御）
+            if (!session.TryAnnounceInvalidationOnce(reason, subjectDeviceId))
+                continue;
             try
             {
                 await session.PushAsync(new Invalidation(session.NextSeq(), session.ServerTimestamp(),
