@@ -62,7 +62,8 @@ public sealed record TcpMissView(string Receiver, string Sender, int TargetPort,
 /// 预测目标只有一个端口值，N 路中恰有一路持有之）；<br/>
 /// ④ 入站交付（接收方端口 W 的映射查表）：**出站映射**按精确身份过滤——源侧为本次连接分配的
 /// 端口须等于映射的目的端口（APDF，对称 rendezvous c_{N-2} 四元组交叉）；**探测映射**交付到
-/// 探测时的内部端点 listen（N=1 直连 STUN 端口前提，02 §5.2，任意注册来源可入、多次可入）；<br/>
+/// 探测时的内部端点 listen（N=1 直连 STUN 端口前提，02 §5.2，任意注册来源可入、多次可入；
+/// 扰动窗内毒化为无人监听端口——扇形 +0 腿的必败因子，见 <see cref="RegisterClient"/>）；<br/>
 /// ⑤ 桥接：应用层终结——出站映射 splice 双 accept 套接字；探测映射以新套接字 connect 内部
 /// listen 后 splice。PTP 字节流透明、内核不可见（不可验证真机 SYN 时差——A-5 保留手工样本）。<br/>
 /// 未注册来源 / 无映射 / 身份不匹配 / 桥接重复 → 关闭 + <see cref="Missed"/> 记录（负向断言即时化）。
@@ -89,11 +90,17 @@ public sealed class TcpNatSimulator : IAsyncDisposable
     }
 
     /// <summary>注册一个客户端 NAT：internalIp 为其内网侧地址（建议独立回环 IP）；端口子段按注册序分配。
-    /// punchPerturbation：首次 STUN 探测（打洞会话）后、后续出站连接前，向该客户端端口序列注入 s 条
-    /// 外来流占用（探测型映射、内部指向无人监听端口）——模拟真实 NAT 时序窗内其他 TCP 流对端口预测的
-    /// 扰动：s ≥ N−1 时对端预测目标落在非打洞映射上 → 必 miss（协议已统一双方 N=TD-13/20，
-    /// N_A≠N_B 场景以此等效呈现，TD-21）。</summary>
-    public void RegisterClient(IPAddress internalIp, TcpNatMode mode, string name, int punchPerturbation = 0)
+    /// punchPerturbation：扰动窗内（首探测；persistPerturbation 则每次探测）对该客户端注入两层必败因子
+    ///（扇形口径 02 §5.2⑥：对端 connect 目标为 P+[0..N−1] 全扇）——<br/>
+    /// ① 探测门毒化：本次探测映射的交付目标改指无人监听端口——模拟 APDF 对称 NAT「探测映射对第三方
+    /// 不可入」，封掉扇首 +0（=探测端口）腿；<br/>
+    /// ② 外来流占位：注入 s 条外来映射占用 P+1..+s（内部指向无人监听端口）——封掉 +1..+(N−1) 各腿，
+    /// s ≥ N−1 时对端扇形全落非打洞映射 → 必 miss（协议已统一双方 N=TD-13/20，N_A≠N_B 场景以此
+    /// 等效呈现，TD-21）。<br/>
+    /// persistPerturbation=true：扰动不随首探测耗尽，每次探测均封门+占位——「重打永败」世界
+    ///（M2-37 周期重打、M2-38/32 SymmetricRandom 必败）；缺省一次性（M2-19 首打 miss、重打干净命中）。</summary>
+    public void RegisterClient(IPAddress internalIp, TcpNatMode mode, string name,
+        int punchPerturbation = 0, bool persistPerturbation = false)
     {
         lock (_lock)
         {
@@ -105,6 +112,7 @@ public sealed class TcpNatSimulator : IAsyncDisposable
             _clients[internalIp] = new ClientNat(name, mode, internalIp, subBase + 1, subBase + _options.SubRangeSize - 1)
             {
                 PunchPerturbation = punchPerturbation,
+                PersistPerturbation = persistPerturbation,
             };
             _registered++;
         }
@@ -173,19 +181,25 @@ public sealed class TcpNatSimulator : IAsyncDisposable
             lock (_lock)
             {
                 pub = AllocateNoLock(nat);
-                nat.Mappings[pub] = new Mapping(nat, remote, pub, StunEndpoint, null); // 探测映射：交付目标=内部端点 listen
-                // 首次探测（打洞会话）注入时序扰动（一次性）：外来流占用 s 个后续端口——
-                // 内部指向无人监听端口（探测型），预测目标命中它们即 listener_refused miss
-                if (nat.PunchPerturbation > 0)
+                // 扰动窗（首探测或每次探测）：①探测门毒化——交付目标改指无人监听端口，扇首 +0 腿
+                // listener_refused（APDF：探测映射对第三方不可入）；②外来占位——封 +1..+s 腿。
+                // 扇形口径下 +0 恒被对端瞄准（≠旧单点 +(N−1) 只瞄尾），门毒化是必败代数的必要项。
+                var perturb = nat.PunchPerturbation;
+                var perturbActive = perturb > 0 || nat.PersistPerturbation;
+                nat.Mappings[pub] = new Mapping(nat,
+                    perturbActive ? new IPEndPoint(nat.InternalIp, 1) : remote, // 探测映射：交付目标=内部端点 listen
+                    pub, StunEndpoint, null);
+                if (perturb > 0 && !nat.PersistPerturbation)
+                    nat.PunchPerturbation = 0; // 一次性：仅打洞会话首探测注入（重打时门恢复开放 → 干净命中）
+                if (perturbActive)
                 {
-                    for (var i = 0; i < nat.PunchPerturbation; i++)
+                    for (var i = 0; i < perturb; i++)
                     {
                         var foreign = AllocateNoLock(nat);
                         nat.Mappings[foreign] = new Mapping(nat,
                             new IPEndPoint(nat.InternalIp, 1), foreign, // 端口 1：必然无人监听
                             new IPEndPoint(_options.PublicAddress, 1), null);
                     }
-                    nat.PunchPerturbation = 0;
                 }
             }
             OpenWindow(nat, pub); // 窗口先于响应（响应触发对端打洞时窗口必须就位）
@@ -405,6 +419,7 @@ public sealed class TcpNatSimulator : IAsyncDisposable
         public int SubCeiling { get; } = subCeiling;
         public int NextPort { get; set; } = subBase;
         public int PunchPerturbation { get; set; }
+        public bool PersistPerturbation { get; init; }
         public Dictionary<int, Mapping> Mappings { get; } = [];
     }
 

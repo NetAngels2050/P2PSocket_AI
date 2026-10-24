@@ -37,6 +37,8 @@ public sealed class StunService : IAsyncDisposable
     private readonly IPEndPoint? _alt; // 配置的辅端点（地址=通告 IP；端口 0=UDP 随机 TCP 跟随）
     private readonly IPAddress? _advertisedIp; // 主侧通告 IP：public_addr（M2-36 同语义）优先，空=按对端路由派生
     private readonly BlacklistStore? _blacklist; // M5-08：UDP 到达/TCP accept 闸（07 §13.3）
+    private readonly Func<SignalingCoordinator.PunchExchangeRequest, CancellationToken,
+        Task<SignalingCoordinator.PunchExchangePeer?>>? _exchange; // 0x78 打洞交换（02 §5.2⑥）：null=未接线（旧装配/单测缺省=忽略交换请求）
     private UdpClient _udp = null!;
     private TcpListener _tcpListener = null!;
     private UdpClient? _altUdp;
@@ -51,7 +53,9 @@ public sealed class StunService : IAsyncDisposable
 
     public StunService(IDbContextFactory<AppDbContext> dbFactory, bool requireAuth = true,
         TimeProvider? time = null, StunGuardOptions? guard = null, IPEndPoint? alt = null,
-        BlacklistStore? blacklist = null)
+        BlacklistStore? blacklist = null,
+        Func<SignalingCoordinator.PunchExchangeRequest, CancellationToken,
+            Task<SignalingCoordinator.PunchExchangePeer?>>? exchange = null)
     {
         _dbFactory = dbFactory;
         _requireAuth = requireAuth;
@@ -59,6 +63,7 @@ public sealed class StunService : IAsyncDisposable
         _guard = new StunGuard(guard, _time);
         _alt = alt;
         _blacklist = blacklist;
+        _exchange = exchange;
         if (alt is not null)
         {
             // 主侧通告 IP：public_addr 是 IP 时直接采用（云 NAT 部署派生会得内网地址，M2-36 同问题域）；
@@ -199,15 +204,18 @@ public sealed class StunService : IAsyncDisposable
     }
 
     /// <summary>Binding 响应组包（M3-15）：alt 未配置=M1 形状（仅 XOR-MAPPED）；
-    /// 配置后携带 RESPONSE-ORIGIN（实际回包源）与 OTHER-ADDRESS（另一端点，相对语义）。</summary>
-    private byte[] BuildResponse(ReadOnlySpan<byte> transactionId, IPEndPoint remote, bool fromAlt)
+    /// 配置后携带 RESPONSE-ORIGIN（实际回包源）与 OTHER-ADDRESS（另一端点，相对语义）。
+    /// peerAddress/peerCandidates（02 §5.2⑥）：打洞交换应答追加对端观测端点+候选。</summary>
+    private byte[] BuildResponse(ReadOnlySpan<byte> transactionId, IPEndPoint remote, bool fromAlt,
+        IPEndPoint? peerAddress = null, IPEndPoint[]? peerCandidates = null)
     {
-        if (AltEndpoint is null)
+        if (AltEndpoint is null && peerAddress is null)
             return StunCodec.BuildBindingResponse(transactionId, remote.Address, (ushort)remote.Port);
         var primary = AdvertisedPrimary(remote);
         return StunCodec.BuildBindingResponse(transactionId, remote.Address, (ushort)remote.Port,
             otherAddress: fromAlt ? primary : AltEndpoint,
-            responseOrigin: fromAlt ? AltEndpoint : primary);
+            responseOrigin: fromAlt ? AltEndpoint : primary,
+            peerAddress: peerAddress, peerCandidates: peerCandidates);
     }
 
     /// <summary>主侧通告端点：public_addr（启动期读取）优先；未配置时按对端地址探路由源 IP
@@ -272,6 +280,15 @@ public sealed class StunService : IAsyncDisposable
             if (_requireAuth && !TryAuthorize(wire, out auth)) return;
             if (auth is not null && !_guard.TryAcquireDevice(auth.DeviceId)) return;
 
+            // 打洞交换事务（02 §5.2⑥）：PUNCH-SESSION 属性在=注册观测端点→等对端→同刻回对端信息；
+            // 连接保持打开（钉活客户端基准映射）直至对端关闭/超时。需 DEVICE-AUTH（会话参与者校验在协调器）
+            if (auth is not null && StunCodec.TryGetPunchSession(wire, out var punchSessionId))
+            {
+                await ServePunchExchangeAsync(stream, wire, punchSessionId, auth.DeviceId, remote, ct)
+                    .ConfigureAwait(false);
+                return;
+            }
+
             var response = BuildResponse(
                 wire.AsSpan(8, StunCodec.TransactionIdLen), remote, fromAlt);
             await StunTcpFraming.WriteAsync(stream, response, txn.Token).ConfigureAwait(false);
@@ -282,6 +299,34 @@ public sealed class StunService : IAsyncDisposable
             // 协议错（msgLen 超限/中途断开）/对端中止/3s 超时/停机：短事务断连收场
         }
         finally { _guard.ReleaseTcp(remote.Address); }
+    }
+
+    /// <summary>打洞交换事务等待上限（02 §5.2⑥）：略大于信令会话超时（10s）——收割先行取消，
+    /// 此值为对端幽灵连接（注册后会话已收尾等异常）的兜底释放。</summary>
+    public static readonly TimeSpan ExchangeWaitTimeout = TimeSpan.FromSeconds(12);
+
+    /// <summary>打洞交换事务（02 §5.2⑥，2026-10-24）：注册本端观测端点+候选（协调器）→
+    /// 等对端到齐（先到者挂起；后到者触发双端同刻应答）→ 回 PEER-ADDRESS/PEER-CANDIDATES →
+    /// 连接保持打开排空至对端关闭（客户端打洞收尾后关连接；映射钉活语义归连接本身）。
+    /// null（会话未知/收割/超时）= 静默断连，客户端 4s 读超时先行兜底。</summary>
+    private async Task ServePunchExchangeAsync(NetworkStream stream, byte[] wire, Guid sessionId,
+        Guid deviceId, IPEndPoint remote, CancellationToken ct)
+    {
+        if (_exchange is null) return;
+        using var txn = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        txn.CancelAfter(ExchangeWaitTimeout);
+        var candidates = StunCodec.ParseCandidates(wire);
+        var peer = await _exchange(
+            new SignalingCoordinator.PunchExchangeRequest(sessionId, deviceId, remote, candidates),
+            txn.Token).ConfigureAwait(false);
+        if (peer is null) return;
+        var response = BuildResponse(wire.AsSpan(8, StunCodec.TransactionIdLen), remote, fromAlt: false,
+            peerAddress: peer.Endpoint, peerCandidates: peer.Candidates);
+        await StunTcpFraming.WriteAsync(stream, response, txn.Token).ConfigureAwait(false);
+        // 应答后保持打开：排空至客户端关闭或超时（客户端收尾即关；此读循环只为 socket 生命周期对齐）
+        var drain = new byte[512];
+        try { while (await stream.ReadAsync(drain, txn.Token).ConfigureAwait(false) > 0) { } }
+        catch { /* 对端关闭/超时/停机 */ }
     }
 
     /// <summary>DEVICE-AUTH 全链（闸②查表在 <see cref="StunCodec.TryParseDeviceAuth"/> 的

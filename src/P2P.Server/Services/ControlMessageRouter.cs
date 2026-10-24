@@ -113,6 +113,9 @@ public sealed class ControlMessageRouter
             case PunchRequest punchRequest:
                 await _signaling.HandlePunchRequestAsync(session, punchRequest);
                 break;
+            case PunchStart punchStart: // 0x78 晚探测起跑（02 §5.2⑥，2026-10-24）
+                await _signaling.HandlePunchStartAsync(session, punchStart);
+                break;
             case PunchEndpoint punchEndpoint:
                 await _signaling.HandlePunchEndpointAsync(session, punchEndpoint);
                 break;
@@ -157,5 +160,5 @@ public sealed class ControlMessageRouter
         or MsgType.JoinRequests or MsgType.GroupInviteGen or MsgType.GroupUpdate
         or MsgType.GroupDissolve or MsgType.GroupRemoveMember
         or MsgType.MappingUpsert or MsgType.MappingDelete
-        or MsgType.PunchRequest;
+        or MsgType.PunchRequest or MsgType.PunchStart;
 }

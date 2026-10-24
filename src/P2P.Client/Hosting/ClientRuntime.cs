@@ -67,6 +67,10 @@ public sealed record ClientRuntimeOptions
     /// <summary>网络面枚举源覆盖缝（M3-13，FR-C-204）：生产 null=SubnetSurvey.Snapshot
     ///（真实地址/路由表）；集成测注入可变替身驱动冲突命中→API/WS 可见→解除消失全链。</summary>
     public SubnetConflictDetector.SurveySource? SubnetSurveyOverride { get; init; }
+
+    /// <summary>禁用 0x78 晚探测流程（§5.2⑥ 测试缝）：true=仅旧 0x70 流程（A-3~A-6 场景
+    /// 断言旧流程行为——STUN 替身无交换语义）；生产 false=新流程优先、旧流程兜底。</summary>
+    public bool DisableLatePunch { get; init; }
 }
 
 /// <summary>客户端全组件生命周期（单一属主；启动序=01 §4.1，停机序为其逆序）。</summary>
@@ -481,7 +485,20 @@ public sealed class ClientRuntime : IAsyncDisposable
             // 0x77 齐射锚点等待缝（§5.2⑤ 方案 A）：B 侧打洞齐射等服务器锚点（与 A 的 Ack 同刻下发）
             // 后与 A 各倒数同一 Δ 到点齐射；超时（旧服务端）兜底立即开火
             punchFireWaiter: (sessionId, timeout, token) =>
-                _control.WaitForPunchFireAsync(sessionId, timeout, token)));
+                _control.WaitForPunchFireAsync(sessionId, timeout, token),
+            // 0x78 起跑缝（§5.2⑥ 晚探测流程）：N 随 settings 当前值（同 0x70 口径）；
+            // DisableLatePunch 测试缝=true 时省略——Puncher 编排器判空即整体走旧流程
+            punchStartSender: _options.DisableLatePunch ? null
+                : (targetId, trigger, proto, token) =>
+                    _control.SendRequestAsync<PunchStartGo>(seq => new PunchStart(seq, _control.TimestampMs(),
+                        MsgType.PunchStart, targetId, trigger, proto,
+                        PunchConcurrency: (byte?)_settings.Settings.PunchConcurrency), token),
+            // STUN-TCP 交换缝（§5.2⑥）：预绑 L 的未连接句柄进、保持打开出（映射钉活，Puncher 管生命周期）
+            tcpExchange: _options.DisableLatePunch ? null
+                : (socket, sessionId, candidates, token) => stunEp is null
+                    ? throw new IOException("STUN 地址解析失败（服务端主机名不可解析，TD-07 :3478）")
+                    : StunTcpProber.ProbeExchangeAsync(socket, stunEp, deviceId, deviceSecret, _control.Clock,
+                        sessionId, candidates, ct: token)));
         Log?.Invoke($"打洞器已接线（STUN={stunEp?.ToString() ?? "解析失败"}，派生自控制地址 :3478，TD-07）");
     }
 
@@ -496,6 +513,9 @@ public sealed class ClientRuntime : IAsyncDisposable
         {
             case PunchInvite invite:
                 _ = HandleInviteAsync(invite);
+                break;
+            case PunchStartGo go: // 0x78 起跑推送（02 §5.2⑥，晚探测流程 B 侧）
+                _ = HandleGoAsync(go);
                 break;
             case RelayGrant grant:
                 _ = HandleRelayGrantAsync(grant);
@@ -543,6 +563,29 @@ public sealed class ClientRuntime : IAsyncDisposable
             }
         }
         catch (Exception e) { Log?.Invoke($"[punch] 0x71 处理失败：{e.Message}"); }
+    }
+
+    /// <summary>0x78 PunchStartGo（02 §5.2⑥ 晚探测流程 B 侧）：同 0x71 口径——relayAllowed 真预记
+    /// 中继关联上下文，成功会话入宿主即撤销。</summary>
+    private async Task HandleGoAsync(PunchStartGo go)
+    {
+        if (go.RelayAllowed)
+            lock (_relayInvites)
+            {
+                PruneInvitesLocked();
+                _relayInvites[go.SessionId] = (DateTimeOffset.UtcNow + RelayInviteTtl,
+                    new RelayInviteContext(go.Peer.DeviceId, go.Peer.StaticPubKey));
+            }
+        try
+        {
+            var outcome = await _scheduler.RespondGoAsync(go, _cts.Token);
+            if (outcome.Ok && outcome.Session is { IsClosed: false })
+            {
+                _host.Attach(outcome.Session);
+                ForgetInvite(go.SessionId);
+            }
+        }
+        catch (Exception e) { Log?.Invoke($"[punch] 0x78 Go 处理失败：{e.Message}"); }
     }
 
     // ── 被邀请侧中继回退（M2-18，02 §4.5/§6.1）──────────────────────
@@ -801,6 +844,9 @@ public sealed class ClientRuntime : IAsyncDisposable
         public Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default)
             => (_inner ?? NotReadyPuncher.Instance).RespondAsync(invite, ct);
 
+        public Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+            => (_inner ?? NotReadyPuncher.Instance).RespondGoAsync(go, ct);
+
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _inner, null) is Puncher real) real.Dispose();
@@ -817,5 +863,8 @@ public sealed class ClientRuntime : IAsyncDisposable
 
         public Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default)
             => Task.FromResult(PunchOutcome.Failure(invite.Peer.DeviceId, "puncher_not_ready"));
+
+        public Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+            => Task.FromResult(PunchOutcome.Failure(go.Peer.DeviceId, "puncher_not_ready"));
     }
 }

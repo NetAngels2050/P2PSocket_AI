@@ -344,7 +344,7 @@ public sealed class InvalidationFlowIntegrationTests : IAsyncLifetime
     /// requireMapping=false（M2-33）：无映射设备（B 侧）只候 running。</summary>
     private async Task<RuntimeHarness> StartRuntimeAsync(SeededDevice a, string dirA, bool requireMapping = true)
     {
-        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic, DisableLatePunch = true });
         await runtime.StartAsync();
         var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime.WebPort}") };
         // M5-12：本地 Web token 注入（07 §14.2）——裸 HTTP 401

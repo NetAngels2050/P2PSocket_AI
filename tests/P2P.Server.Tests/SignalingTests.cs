@@ -152,6 +152,65 @@ public sealed class SignalingTests : IAsyncLifetime
         Assert.Equal(invite.SessionId, ack.SessionId);
     }
 
+    // ── §5.2⑥（2026-10-25）：0x78 晚探测起跑 + STUN 交换双端到齐同刻互回 ──
+
+    [Fact]
+    public async Task PunchStart_双端起跑_交换到齐同刻互回对端端点()
+    {
+        var (a, aId, _) = await RegisterAsync("go-a");
+        var (b, bId, _) = await RegisterAsync("go-b");
+
+        await a.SendAsync(new PunchStart(a.NextSeq(), a.Now(), MsgType.PunchStart,
+            bId, null, "tcp", PunchConcurrency: 3));
+
+        // A 收同族 Go 应答、B 收 Go 推送（服务端受理即同刻背靠背双推）：sessionId/N/relayAllowed 同源
+        var goA = await a.ReceiveAsync<PunchStartGo>(15000) ?? throw new IOException("A 未收到 Go 应答");
+        var goB = await b.ReceiveAsync<PunchStartGo>(15000) ?? throw new IOException("B 未收到 Go 推送");
+        Assert.Equal(goA.SessionId, goB.SessionId);
+        Assert.Equal((byte)3, goA.PunchCount);
+        Assert.Equal("go-b", goA.Peer.DeviceName); // 各持对端信息（含公钥，握手身份源）
+        Assert.Equal("go-a", goB.Peer.DeviceName);
+        Assert.NotEmpty(goA.Peer.StaticPubKey);
+
+        // 双端 STUN 交换注册（StunService 侧钩子直调）：后到者触发，双方各得对端观测端点+候选
+        var sid = goA.SessionId;
+        var epA = new IPEndPoint(IPAddress.Parse("203.0.113.10"), 40001);
+        var epB = new IPEndPoint(IPAddress.Parse("198.51.100.20"), 40002);
+        var candA = new[] { new IPEndPoint(IPAddress.Parse("10.0.0.4"), 40001) };
+        var waitA = _signaling.WaitForPunchExchangeAsync(
+            new SignalingCoordinator.PunchExchangeRequest(sid, aId, epA, []), CancellationToken.None);
+        var waitB = _signaling.WaitForPunchExchangeAsync(
+            new SignalingCoordinator.PunchExchangeRequest(sid, bId, epB, candA), CancellationToken.None);
+        var gotA = await waitA; // 先到者由后到者触发完成
+        var gotB = await waitB;
+        Assert.NotNull(gotA);
+        Assert.NotNull(gotB);
+        Assert.Equal(epB, gotA!.Endpoint); // A 得 B 的观测端点
+        Assert.Equal(epA, gotB!.Endpoint); // B 得 A 的观测端点
+        Assert.Contains(candA[0], gotA.Candidates);
+
+        // 交换完成=会话收尾入台账（0x74/0x72 上下文，与 0x76 路径同构）
+        Assert.NotNull(_signaling.ResolvePunchContext(sid));
+
+        // 未知会话/非参与者/重复注册：null（静默，客户端超时兜底）
+        var ghost = await _signaling.WaitForPunchExchangeAsync(
+            new SignalingCoordinator.PunchExchangeRequest(Guid.NewGuid(), aId, epA, []), CancellationToken.None);
+        Assert.Null(ghost);
+        var dup = await _signaling.WaitForPunchExchangeAsync(
+            new SignalingCoordinator.PunchExchangeRequest(sid, aId, epA, []), CancellationToken.None);
+        Assert.Null(dup);
+    }
+
+    [Fact]
+    public async Task PunchStart_udp_拒绝1001_protect旧语义()
+    {
+        var (a, _, _) = await RegisterAsync("go-u-a");
+        var (b, bId, _) = await RegisterAsync("go-u-b");
+        await a.SendAsync(new PunchStart(a.NextSeq(), a.Now(), MsgType.PunchStart, bId, null, "udp"));
+        var error = await a.ReceiveAsync<ErrorMessage>();
+        Assert.Equal(ErrorCode.BadRequest, error!.Code); // 晚探测仅 tcp（UDP 打洞路径不变）
+    }
+
     // ── M2-07：relay_enabled=0 → relayAllowed=false 全链路 ─────────────
 
     [Fact]

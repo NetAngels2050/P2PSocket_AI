@@ -256,7 +256,9 @@ builder.Services.AddSingleton(sp =>
         PerDeviceQps = cfg.GetInt("stun_rate_per_device"),
         CircuitPps = cfg.GetInt("stun_circuit_pps"),
     }, alt: ParseAltEndpoint(cfg.Get("stun_alt_addr")),
-    blacklist: sp.GetRequiredService<BlacklistStore>()); // M5-08：UDP 到达/TCP accept 闸（07 §13.3）
+    blacklist: sp.GetRequiredService<BlacklistStore>(), // M5-08：UDP 到达/TCP accept 闸（07 §13.3）
+    // 0x78 打洞交换（02 §5.2⑥）：3478/TCP PUNCH-SESSION 事务 → SignalingCoordinator 双端到齐同刻应答
+    exchange: (req, ct) => sp.GetRequiredService<SignalingCoordinator>().WaitForPunchExchangeAsync(req, ct));
 });
 builder.Services.AddHostedService<ServerHostService>();
 // M3-01/02 服务端 Web 后台（04 §3、D11 仅本机监听）：注册于 ServerHostService 之后 ⇒

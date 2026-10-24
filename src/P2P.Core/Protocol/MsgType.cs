@@ -53,6 +53,7 @@ public static class MsgType
     public const byte Invalidation = 0x75;     // 失效推送（reason 七值）
     public const byte PunchEndpoint = 0x76;    // C→S 被邀请方端点回传（OQ-18/TD-19）
     public const byte PunchFire = 0x77;        // S→C 被邀请方齐射锚点（随 0x70 Ack 同刻下发，02 §5.2⑤）
+    public const byte PunchStart = 0x78;       // C→S 晚探测起跑申请 / S→C PunchStartGo 双端起跑（02 §5.2⑥）
 
     // 其他
     public const byte Error = 0x7E;

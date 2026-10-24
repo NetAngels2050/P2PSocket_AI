@@ -142,6 +142,9 @@ public sealed class MappingSyncIntegrationTests : IAsyncLifetime
 
         public Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default)
             => throw new NotSupportedException();
+
+        public Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+            => Task.FromResult(PunchOutcome.Failure(go.Peer.DeviceId, "go_not_supported"));
     }
 
     /// <summary>客户端全家桶 + 本地 Web API 宿主。</summary>

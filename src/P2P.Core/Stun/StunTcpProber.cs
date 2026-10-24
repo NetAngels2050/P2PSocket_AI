@@ -24,6 +24,59 @@ public static class StunTcpProber
     /// 事务结束（成功或失败）本方法关闭并释放该 socket——端口 L 随后由调用方以新 socket
     /// （ReuseAddress）listen+connect 复用（02 §3.3 端口保留复用约定）。
     /// </summary>
+    /// <summary>打洞交换事务结果（02 §5.2⑥）：本端观测端点 + 对端观测端点/候选（应答即开火锚点）。</summary>
+    public sealed record PunchExchange(IPEndPoint Mapped, IPEndPoint PeerEndpoint, IPEndPoint[] PeerCandidates);
+
+    /// <summary>打洞交换事务（02 §5.2⑥，2026-10-24）：预绑定端口 L 的 socket 连 STUN:3478/TCP，
+    /// 请求携带 PUNCH-SESSION(sessionId)+CANDIDATES(本机候选)+DEVICE-AUTH；服务端收齐双端后在
+    /// 两条连接上**同刻**回 PEER-ADDRESS+PEER-CANDIDATES——应答到达即锚点、即刻开火。
+    /// 与 <see cref="ProbeAsync"/> 的关键差异：**连接保持打开**（映射被钉活，预测基准零漂移）——
+    /// socket 生命周期归调用方（打洞收尾后关闭）。超时/协议错抛 IOException。</summary>
+    public static async Task<PunchExchange> ProbeExchangeAsync(
+        Socket socket, IPEndPoint stunServer, Guid deviceId, ReadOnlyMemory<byte> deviceSecret,
+        ClockSync clock, Guid punchSessionId, IReadOnlyList<IPEndPoint>? candidates,
+        TimeProvider? time = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(socket);
+        ArgumentNullException.ThrowIfNull(stunServer);
+        ArgumentNullException.ThrowIfNull(clock);
+        if (socket.Connected) throw new ArgumentException("socket 须为未连接的预绑定端口 L 句柄", nameof(socket));
+        time ??= TimeProvider.System;
+        timeout ??= TimeSpan.FromSeconds(4); // 双端起跑并行，正常 <1s；超时多为对端旧版/丢失（不降级旧流程，直接失败走中继）
+        using var txnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        txnCts.CancelAfter(timeout.Value);
+        try
+        {
+            await socket.ConnectAsync(stunServer, txnCts.Token).ConfigureAwait(false);
+            using var stream = new NetworkStream(socket, ownsSocket: false);
+
+            var tid = StunCodec.NewTransactionId();
+            var request = StunCodec.BuildBindingRequest(tid, deviceId, deviceSecret.Span,
+                clock.NowRemoteMs(time), RandomGenerator.Bytes(16),
+                punchSession: punchSessionId, candidates: candidates);
+            await StunTcpFraming.WriteAsync(stream, request, txnCts.Token).ConfigureAwait(false);
+
+            var wire = await StunTcpFraming.TryReadAsync(stream, txnCts.Token).ConfigureAwait(false)
+                ?? throw new IOException($"打洞交换连接在响应前关闭：{stunServer}");
+            if (!StunCodec.TryParseBindingResponse(wire, out var response)
+                || !response!.TransactionId.AsSpan().SequenceEqual(tid))
+                throw new IOException($"打洞交换响应无效：{stunServer}");
+            if (response.PeerEndpoint is null)
+                throw new IOException($"打洞交换响应缺 PEER-ADDRESS：{stunServer}");
+            return new PunchExchange(response.Mapped, response.PeerEndpoint,
+                response.PeerCandidates ?? []);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new IOException($"打洞交换超时（{timeout.Value.TotalSeconds:0}s）：{stunServer}");
+        }
+        catch (SocketException ex)
+        {
+            throw new IOException($"打洞交换连接失败：{stunServer}", ex);
+        }
+        // 无 finally 关闭：连接保持打开（钉活映射），socket 归调用方
+    }
+
     public static async Task<IPEndPoint> ProbeAsync(
         Socket socket, IPEndPoint stunServer, Guid deviceId, ReadOnlyMemory<byte> deviceSecret,
         ClockSync clock, TimeProvider? time = null, TimeSpan? timeout = null, CancellationToken ct = default)

@@ -6,6 +6,7 @@ using P2P.Client.Punch;
 using P2P.Client.Tunnel;
 using P2P.Core.Crypto;
 using P2P.Core.Protocol;
+using P2P.Core.Stun;
 using P2P.Core.Tunnel;
 using Xunit;
 
@@ -14,30 +15,33 @@ namespace P2P.Client.Tests;
 // ── M2-16 单测（任务清单完成判定：N 条并发目标端口偏移正确、第 1 条沿用 L、胜出取消其余 N−1、
 //    N_A≠N_B 必 miss（对称性验证）、N 取 0x70 Ack 回填值；TCP 承载 u16 前缀分帧）──
 
-/// <summary>端口预测纯逻辑（02 §5.2：目标统一 portTcp+(N−1)，单元素偏移扩展点）。</summary>
+/// <summary>端口预测纯逻辑（02 §5.2⑥ 扇形：偏移 [0..N−1]，每偏移一条 connect）。</summary>
 public sealed class TcpPunchPlanTests
 {
     [Theory]
-    [InlineData(1, 0)] // 直连 STUN 端口
+    [InlineData(1, 0)]
     [InlineData(2, 1)]
     [InlineData(3, 2)] // 默认
     [InlineData(4, 3)]
     [InlineData(5, 4)] // 上限
-    public void 偏移表_单元素N减一(int n, int offset)
+    public void 偏移扇_零起连续_含对端端点原样(int n, int topOffset)
     {
-        Assert.Equal([offset], TcpPunchPlan.Offsets(n));
-        Assert.Equal(40000 + offset, TcpPunchPlan.TargetPort(40000, n));
+        Assert.Equal(Enumerable.Range(0, n), TcpPunchPlan.Offsets(n));
+        var targets = TcpPunchPlan.TargetEndpoints(new IPEndPoint(IPAddress.Loopback, 40000), n);
+        Assert.Equal(n, targets.Length);
+        Assert.Equal(40000, targets[0].Port);            // 偏移 0=对端端点原样（§5.4 直连路径并入扇形）
+        Assert.Equal(40000 + topOffset, targets[^1].Port);
+        Assert.All(targets, t => Assert.Equal(IPAddress.Loopback, t.Address));
     }
 
-    [Theory]
-    [InlineData(1, 2)]
-    [InlineData(2, 4)]
-    [InlineData(3, 5)]
-    [InlineData(1, 5)]
-    public void 不对称N_目标端口必错位_代数上必miss(int nA, int nB)
+    [Fact]
+    public void 扇形子集性_小N扇被大N扇覆盖_异N混布仍可交叉()
     {
-        // 对称性硬约束（02 §5.2②）：双方 N 不一致 → A 瞄准的端口 ≠ B 实际落位端口 → 预测基准错位
-        Assert.NotEqual(TcpPunchPlan.TargetPort(50000, nA), TcpPunchPlan.TargetPort(50000, nB));
+        // 扇形消解旧单点口径的「不对称 N 必 miss」：小 N 的扇是大 N 扇的子集——
+        // 混布（两端配置不同 N）时小扇落位仍被大扇覆盖，交叉命中不依赖 N 相等
+        var small = TcpPunchPlan.Offsets(3);
+        var big = TcpPunchPlan.Offsets(5);
+        Assert.All(small, o => Assert.Contains(o, big));
     }
 }
 
@@ -221,7 +225,7 @@ public sealed class TcpPunchFleetTests
         listener.Start(8);
 
         await using var fleet = TcpPunchFleet.Create(IPAddress.Loopback, l,
-            new IPEndPoint(IPAddress.Loopback, targetPort), null, 3, PtpFrameType.THello1);
+            [new IPEndPoint(IPAddress.Loopback, targetPort)], null, 3, PtpFrameType.THello1);
         var accepted = await AcceptAsync(listener, 3, "对端接受 3 条 connect");
 
         Assert.Equal(l, fleet.FirstConnectLocalPort);            // 第 1 条沿用 L（02 §5.2③b）
@@ -237,7 +241,7 @@ public sealed class TcpPunchFleetTests
         var l = FreePort();
         var closed = FreePortApart(l); // connect 目标无人监听：全部拒连，仅剩 listen 路径
         await using var fleet = TcpPunchFleet.Create(IPAddress.Loopback, l,
-            new IPEndPoint(IPAddress.Loopback, closed), null, 2, PtpFrameType.THello1);
+            [new IPEndPoint(IPAddress.Loopback, closed)], null, 2, PtpFrameType.THello1);
 
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, l); // 外部连入端口 L → listen accept 入池
@@ -260,7 +264,7 @@ public sealed class TcpPunchFleetTests
         listener.Start(8);
 
         await using var fleet = TcpPunchFleet.Create(IPAddress.Loopback, l,
-            new IPEndPoint(IPAddress.Loopback, targetPort), null, 3, PtpFrameType.THello1);
+            [new IPEndPoint(IPAddress.Loopback, targetPort)], null, 3, PtpFrameType.THello1);
         var accepted = await AcceptAsync(listener, 3, "对端接受 3 条 connect");
 
         // 对端在第 2 条连接上送 THello1 → 该连接胜出
@@ -287,7 +291,7 @@ public sealed class TcpPunchFleetTests
         listener.Start(4);
 
         await using var fleet = TcpPunchFleet.Create(IPAddress.Loopback, FreePortApart(qbase, realPort),
-            new IPEndPoint(IPAddress.Loopback, qbase + 1), null, 2, PtpFrameType.THello1);
+            [new IPEndPoint(IPAddress.Loopback, qbase + 1)], null, 2, PtpFrameType.THello1);
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1200));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fleet.WaitFrameAsync(cts.Token));
         await UntilAsync(() => fleet.FailedConnects >= 2, "两条 connect 均被拒（无监听端口）——波次补射下计数只增不减");
@@ -306,7 +310,7 @@ public sealed class TcpPunchFleetTests
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var fleet = TcpPunchFleet.Create(IPAddress.Loopback, l,
-            new IPEndPoint(IPAddress.Loopback, targetPort), null, 3, PtpFrameType.THello1,
+            [new IPEndPoint(IPAddress.Loopback, targetPort)], null, 3, PtpFrameType.THello1,
             volleyGate: _ => gate.Task);
         await Task.Delay(300); // 闸未开：零发射、零连接（listen 口已就绪但 connect 未出发）
         Assert.Equal(0, fleet.Waves);
@@ -327,7 +331,7 @@ public sealed class TcpPunchFleetTests
         var l = FreePort();
         var targetPort = FreePortApart(l);
         await using var fleet = TcpPunchFleet.Create(IPAddress.Loopback, l,
-            new IPEndPoint(IPAddress.Loopback, targetPort), null, 2, PtpFrameType.THello1,
+            [new IPEndPoint(IPAddress.Loopback, targetPort)], null, 2, PtpFrameType.THello1,
             waveInterval: TimeSpan.FromMilliseconds(150));
         await UntilAsync(() => fleet.FailedConnects >= 2, "首波 2 条 connect 均被拒（门未开）");
 
@@ -358,7 +362,7 @@ public sealed class TcpPunchFleetTests
         var wire2 = PtpFrameCodec.BuildHandshake(PtpFrameType.THello2, new byte[50]);
 
         await using var fleet = TcpPunchFleet.Create(IPAddress.Loopback, l,
-            new IPEndPoint(IPAddress.Loopback, deadAim),
+            [new IPEndPoint(IPAddress.Loopback, deadAim)],
             [new IPEndPoint(IPAddress.Loopback, directPort)], 2, PtpFrameType.THello2,
             onConnection: async t =>
             {
@@ -387,7 +391,7 @@ public sealed class TcpPunchFleetTests
         var directPort = FreePortApart(l, deadAim);
 
         await using var fleet = TcpPunchFleet.Create(IPAddress.Loopback, l,
-            new IPEndPoint(IPAddress.Loopback, deadAim),
+            [new IPEndPoint(IPAddress.Loopback, deadAim)],
             [new IPEndPoint(IPAddress.Loopback, directPort)], 1, PtpFrameType.THello1);
         await UntilAsync(() => fleet.DirectRefused >= 1, "首探测拒连（RST）计数"); // 此刻监听口尚无人听
 
@@ -414,7 +418,7 @@ public sealed class TcpPunchFleetTests
         var wire = PtpFrameCodec.BuildHandshake(PtpFrameType.THello2, new byte[50]);
 
         await using var fleet = TcpPunchFleet.Create(IPAddress.Loopback, l,
-            new IPEndPoint(IPAddress.Loopback, closed), null, 2, PtpFrameType.THello1,
+            [new IPEndPoint(IPAddress.Loopback, closed)], null, 2, PtpFrameType.THello1,
             onConnection: t => t.SendAsync(wire));
 
         using var client = new TcpClient();
@@ -439,6 +443,12 @@ public sealed class PuncherTcpTests
         public ConcurrentQueue<Endpoint[]?> ReportedCandidates { get; } = []; // §5.4 B 侧 0x76 候选
         public Func<Guid, Guid?, string, EndpointPair, Endpoint[]?, CancellationToken, Task<PunchRequestAck>>? RequestHandler;
 
+        /// <summary>0x78 起跑假缝（§5.2⑥）：null=未装（晚探测流程跳过）。</summary>
+        public Func<Guid, Guid?, string, CancellationToken, Task<PunchStartGo>>? StartHandler;
+
+        /// <summary>旧 0x70 流程被触达标记（降级路径断言用）。</summary>
+        public bool LegacyRequested;
+
         /// <summary>探测上报的映射端口 = 本地端口 + 平移量（0=恒等；模拟 SymmetricSequential 下一分配）。</summary>
         public int MappedPortShift;
 
@@ -451,7 +461,7 @@ public sealed class PuncherTcpTests
 
         public Task<IPEndPoint> TcpProbeAsync(Socket socket, CancellationToken ct)
         {
-            var ep = (IPEndPoint)socket.LocalEndPoint!;
+            var ep = new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)socket.LocalEndPoint!).Port); // 恒等 NAT：地址侧归一回环（LocalEndPoint 是 0.0.0.0——连 0.0.0.0 黑洞）
             var mapped = new IPEndPoint(IPAddress.Loopback, ep.Port + MappedPortShift);
             socket.Dispose(); // M2-04 契约：探测事务即关，端口 L 由调用方记录复用
             Probed.TrySetResult(new EndpointPair(null,
@@ -474,6 +484,7 @@ public sealed class PuncherTcpTests
             SeenProto = proto;
             SeenRequesterEndpoints = requesterEndpoints;
             SeenCandidates = localCandidates;
+            LegacyRequested = true;
             if (RequestHandler is not null)
                 return RequestHandler(target, trigger, proto, requesterEndpoints, localCandidates, ct);
             return Task.FromResult(new PunchRequestAck(0, 0, MsgType.PunchRequest, Guid.NewGuid(),
@@ -503,12 +514,20 @@ public sealed class PuncherTcpTests
     private static (Puncher Puncher, FakeTcpSeams Seams) Make(EcKeyPair staticKey,
         int mappedPortShift = 0, PunchOptions? options = null,
         Func<IPAddress?, IReadOnlyList<IPAddress>>? localIps = null,
-        Puncher.PunchFireWaiter? punchFireWaiter = null)
+        Puncher.PunchFireWaiter? punchFireWaiter = null,
+        Puncher.PunchStartSender? punchStartSender = null,
+        Puncher.StunTcpExchangeDelegate? tcpExchange = null,
+        Action<string>? log = null)
     {
         var seams = new FakeTcpSeams { MappedPortShift = mappedPortShift };
-        return (new Puncher(seams.SendRequestAsync, seams.ReportAsync, UdpProbeUnused, staticKey,
+        if (punchStartSender is not null) seams.StartHandler = punchStartSender.Invoke;
+        return (new Puncher(
+            seams.SendRequestAsync, seams.ReportAsync, UdpProbeUnused, staticKey,
             options: options, tcpProbe: seams.TcpProbeAsync, localIpEnumerator: localIps,
-            punchFireWaiter: punchFireWaiter), seams);
+            log: log,
+            punchFireWaiter: punchFireWaiter,
+            punchStartSender: seams.StartHandler is null ? null : (t, tr, p, ct) => seams.StartHandler(t, tr, p, ct),
+            tcpExchange: tcpExchange), seams);
     }
 
     /// <summary>回环枚举缝（§5.4 用例）：候选=127.0.0.1×监听口——回环 fabric 即「同网段/公网可达」。</summary>
@@ -759,6 +778,129 @@ public sealed class PuncherTcpTests
             var outcome = await puncher.InitiateAsync(Guid.NewGuid(), null, "sctp");
             Assert.False(outcome.Ok);
             Assert.Contains("proto_not_supported", outcome.FailReason);
+        }
+    }
+
+    // ── §5.2⑥ 晚探测起跑（2026-10-25）：0x78→交换→扇形 全链路 / 旧服务端降级 ──
+
+    /// <summary>交换假替身（镜像 TcpStunStub 交换语义）：恒等 NAT（mapped=本地端口），
+    /// 双端注册到齐同刻互回；socket 保持打开（不关——映射钉活语义）。</summary>
+    private sealed class LateExchangeHub
+    {
+        private readonly object _gate = new();
+        private readonly Dictionary<Guid, List<(IPEndPoint Ep, IPEndPoint[] Cands,
+            TaskCompletionSource<StunTcpProber.PunchExchange> Tcs)>> _sessions = new();
+
+        public Task<StunTcpProber.PunchExchange> RegisterAsync(Socket socket, Guid sessionId,
+            IReadOnlyList<IPEndPoint>? candidates, CancellationToken ct)
+        {
+            var ep = new IPEndPoint(IPAddress.Loopback, ((IPEndPoint)socket.LocalEndPoint!).Port); // 恒等 NAT：地址归一回环（LocalEndPoint=0.0.0.0 连它会黑洞）
+            var cands = candidates?.ToArray() ?? [];
+            var tcs = new TaskCompletionSource<StunTcpProber.PunchExchange>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_gate)
+            {
+                var list = _sessions.TryGetValue(sessionId, out var e) ? e : _sessions[sessionId] = [];
+                list.Add((ep, cands, tcs));
+                if (list.Count >= 2)
+                {
+                    list[0].Tcs.TrySetResult(new StunTcpProber.PunchExchange(list[0].Ep, list[1].Ep, list[1].Cands));
+                    list[1].Tcs.TrySetResult(new StunTcpProber.PunchExchange(list[1].Ep, list[0].Ep, list[0].Cands));
+                    _sessions.Remove(sessionId);
+                }
+            }
+            return tcs.Task;
+        }
+    }
+
+    [Fact]
+    public async Task 晚探测起跑_交换锚点扇形齐射_全链路成交()
+    {
+        // 0x78 起跑（双推 Go）→ 双端并行 STUN 交换（连接保活、恒等映射）→ 应答即锚点扇形齐射
+        //（N=3，偏移 0=对端 listen 口）→ THello 握手成交；旧 0x70 流程全程不被触达
+        using var staticA = EcKeyPair.Generate();
+        using var staticB = EcKeyPair.Generate();
+        var deviceA = Guid.NewGuid();
+        var deviceB = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+        var hub = new LateExchangeHub();
+        var options = new PunchOptions { TcpWaveInterval = TimeSpan.FromMilliseconds(150) };
+        var logsA = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var logsB = new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+        var (puncherA, seamsA) = Make(staticA, options: options,
+            punchStartSender: (_, _, _, _) => Task.FromResult(new PunchStartGo(0, 0, MsgType.PunchStart,
+                sessionId, new PeerInfo(deviceB, "B", "b00000", staticB.ExportPublicKey()), 3, false)),
+            tcpExchange: hub.RegisterAsync, log: m => logsA.Enqueue(m));
+        var (puncherB, seamsB) = Make(staticB, options: options,
+            tcpExchange: hub.RegisterAsync, log: m => logsB.Enqueue(m));
+        using (puncherA)
+        using (puncherB)
+        {
+            var goB = new PunchStartGo(0, 0, MsgType.PunchStart, sessionId,
+                new PeerInfo(deviceA, "A", "a00000", staticA.ExportPublicKey()), 3, false);
+            var outcomeBTask = puncherB.RespondGoAsync(goB);
+            var outcomeA = await puncherA.InitiateAsync(deviceB, null, "tcp");
+            var outcomeB = await outcomeBTask;
+
+            Assert.True(outcomeA.Ok, $"{outcomeA.FailReason}；A日志={string.Join(" | ", logsA)}");
+            Assert.True(outcomeB.Ok, $"{outcomeB.FailReason}；B日志={string.Join(" | ", logsB)}");
+            Assert.Equal(sessionId, outcomeA.SessionId);
+            Assert.Equal(sessionId, outcomeB.SessionId);
+            Assert.False(seamsA.LegacyRequested); // 0x70 全程未被触达（晚探测独立成交）
+            Assert.Empty(seamsB.Reports);         // 0x76 亦不发生
+            await outcomeA.Session!.DisposeAsync();
+            await outcomeB.Session!.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task 旧服务端静默丢弃0x78_超时自动降级旧070流程成交()
+    {
+        // 旧服务端对未知 msgType 静默丢弃（02 §7）→ PunchStartReplyTimeout 超时 → 编排器降级
+        // 旧流程全窗重打（混布自由升级序）；断言两条路径先后都被触达且成交
+        using var staticA = EcKeyPair.Generate();
+        using var staticB = EcKeyPair.Generate();
+        var deviceA = Guid.NewGuid();
+        var deviceB = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+        var options = new PunchOptions
+        {
+            PunchStartReplyTimeout = TimeSpan.FromMilliseconds(200),
+            TcpWaveInterval = TimeSpan.FromMilliseconds(150),
+        };
+        var (puncherA, seamsA) = Make(staticA, options: options,
+            punchStartSender: async (_, _, _, ct) =>
+            {
+                await Task.Delay(Timeout.Infinite, ct); // 旧服务端：永不应答（静默丢弃）
+                return null!;
+            },
+            tcpExchange: new LateExchangeHub().RegisterAsync);
+        var (puncherB, seamsB) = Make(staticB, options: options);
+        using (puncherA)
+        using (puncherB)
+        {
+            seamsA.RequestHandler = async (target, trigger, proto, endpoints, candidates, ct) =>
+            {
+                var bReported = await seamsB.Reported.Task; // 等价服务端延后 Ack（B 0x76 就绪）
+                return new PunchRequestAck(0, 0, MsgType.PunchRequest, sessionId,
+                    new PeerInfo(deviceB, "B", "b00000", staticB.ExportPublicKey()),
+                    new EndpointPair(null, bReported.Tcp), PunchCount: 1, RelayAllowed: false);
+            };
+
+            var outcomeATask = puncherA.InitiateAsync(deviceB, null, "tcp");
+            var aEp = await seamsA.Probed.Task;
+            var invite = new PunchInvite(0, 0, MsgType.PunchInvite, sessionId,
+                new PeerInfo(deviceA, "A", "a00000", staticA.ExportPublicKey()),
+                new EndpointPair(null, aEp.Tcp), PunchCount: 1, false);
+            var outcomeB = await puncherB.RespondAsync(invite);
+            var outcomeA = await outcomeATask;
+
+            Assert.True(outcomeA.Ok, outcomeA.FailReason); // 降级路径成交
+            Assert.True(outcomeB.Ok, outcomeB.FailReason);
+            Assert.True(seamsA.LegacyRequested);           // 0x70 确实被触达（降级发生）
+            await outcomeA.Session!.DisposeAsync();
+            await outcomeB.Session!.DisposeAsync();
         }
     }
 

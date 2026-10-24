@@ -26,6 +26,7 @@ coverage/
 
 # 测试
 TestResults/
+test-results/
 *.trx
 
 # 本地敏感记录（含服务器凭据，勿入库）

@@ -21,21 +21,20 @@ using P2P.Core.Tunnel;
 
 namespace P2P.Client.Punch;
 
-/// <summary>端口预测纯逻辑（02 §5.2：N 条 connect 目标统一为 对端 portTcp+(N−1)；
-/// N=1→+0、N=2→+1、N=3（默认）→+2、N=4→+3、N=5→+4 上限）。
-/// §5.4 直连优先：偏移 0（对端端点原样）不经此表——由 Puncher 以 directTargets 显式传入 fleet。</summary>
+/// <summary>端口预测纯逻辑（02 §5.2⑥ 扇形，2026-10-24）：N 条 connect 各瞄一个偏移——
+/// 偏移扇 [+0, +1, …, +(N−1)]（N=3→+0/+1/+2；N=5→+0..+4）。
+/// 扇形依据（晚探测流程）：探针连接保持打开=基准映射 M 被钉活——EIF 型 NAT 波次落位 {M, M+1, …}，
+/// 对端相关型映射落位 {M+1, M+2, …}（整体差一位）；扇形同时覆盖两类落位与 ±小漂移
+///（§5.3 多偏移扇形决议落地；旧单点 +(N−1) 口径废止——偏移 0 并入扇形，对端端点原样即扇首）。</summary>
 public static class TcpPunchPlan
 {
-    /// <summary>目标端口偏移表：当前单元素 [N−1]（PRD OQ-1 决议原文）；多偏移扩展点——
-    /// 未来返回多元素不改协议，仅本表与 fleet 的 connect 编排变化。</summary>
-    public static int[] Offsets(int concurrency) => [concurrency - 1];
+    /// <summary>目标端口偏移扇：[0..N−1]（每偏移一条 connect；波次重试同扇重打）。</summary>
+    public static int[] Offsets(int concurrency)
+        => Enumerable.Range(0, Math.Clamp(concurrency, 1, 8)).ToArray();
 
-    /// <summary>N 条 connect 的统一目标端口（对端 STUN-TCP 映射端口 + 首偏移）。</summary>
-    public static int TargetPort(int peerPortTcp, int concurrency) => peerPortTcp + Offsets(concurrency)[0];
-
-    /// <summary>统一目标端点。</summary>
-    public static IPEndPoint TargetEndpoint(IPEndPoint peerMapped, int concurrency)
-        => new(peerMapped.Address, TargetPort(peerMapped.Port, concurrency));
+    /// <summary>N 条 connect 的扇形目标端点集（对端 STUN-TCP 映射端点 + 各偏移）。</summary>
+    public static IPEndPoint[] TargetEndpoints(IPEndPoint peerMapped, int concurrency)
+        => Offsets(concurrency).Select(o => new IPEndPoint(peerMapped.Address, peerMapped.Port + o)).ToArray();
 }
 
 /// <summary>
@@ -79,21 +78,25 @@ internal sealed class TcpPunchFleet : IAsyncDisposable
     }
 
     /// <summary>
-    /// 建池：本地端口 L listen + N 条并发 connect（波次补射，可经开火闸延迟首发；第 1 条沿用 L、
-    /// 其余系统分配），随后对 directTargets 各起一条**拒连重试**的直连探测（§5.4：预测 connect 先发，
-    /// 直连探测后发——不吞本端 NAT 顺序分配端口、保 +(N−1) 预测基准）。
+    /// 建池：本地端口 L listen + N 条并发 connect（扇形多目标+波次补射，可经开火闸延迟首发；
+    /// 第 1 条沿用 L、其余系统分配），随后对 directTargets 各起一条**拒连重试**的直连探测
+    ///（§5.4：预测 connect 先发，直连探测后发——不吞本端 NAT 顺序分配端口、污染预测基准）。
     /// </summary>
+    /// <param name="targets">扇形目标端点集（02 §5.2⑥：对端映射端点+偏移 0..N−1；
+    /// slot i 循环瞄 targets[i % count]——targets 少于 N 时每目标多条 connect）。</param>
     /// <param name="onConnection">连接入池即回调（connect 成功/listen accept/直连探测命中统一触发；
     /// 发起方在其上扇出 THello1；尽力而为，异常不阻断）。</param>
     /// <param name="volleyGate">开火闸（02 §5.2⑤ 方案 A）：非 null 时首波 connect 待闸开放才发射
-    ///（A=Ack 到达倒计时 Δ；B=等 0x77 锚点+倒计时 Δ）；null=建池即打（旧行为/单测缺省）。</param>
+    ///（晚探测流程=交换应答即锚点，闸=null 建池即打；旧流程 A=Ack 倒计时、B=0x77 锚点+倒计时）。</param>
     /// <param name="waveInterval">波次补射步进（缺省 <see cref="WaveInterval"/>；单测可缩短加速）。</param>
-    public static TcpPunchFleet Create(IPAddress? bindAddress, int localPortL, IPEndPoint target,
-        IReadOnlyList<IPEndPoint>? directTargets, int concurrency, byte awaitedFrameType,
+    public static TcpPunchFleet Create(IPAddress? bindAddress, int localPortL,
+        IReadOnlyList<IPEndPoint> targets, IReadOnlyList<IPEndPoint>? directTargets,
+        int concurrency, byte awaitedFrameType,
         Func<TcpFrameTransport, ValueTask>? onConnection = null,
         Func<CancellationToken, Task>? volleyGate = null, TimeSpan? waveInterval = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(concurrency, 1);
+        if (targets.Count == 0) throw new ArgumentException("扇形目标集不得为空", nameof(targets));
         var fleet = new TcpPunchFleet(awaitedFrameType, onConnection);
 
         // a. 本地端口 L listen（02 §5.2③a：SO_REUSEADDR；Linux 加 SO_REUSEPORT）
@@ -104,10 +107,10 @@ internal sealed class TcpPunchFleet : IAsyncDisposable
         fleet._listener = listener;
         fleet._acceptLoop = fleet.AcceptLoopAsync();
 
-        // b. N 条并发 connect（波次补射+可选开火闸）：目标统一 portTcp+(N−1)；每波首条在 L 槽
-        //    空闲时 bind L（02 §5.2③b），其余 bind 0（不同本地端口，避免同源端口×同目标端口的
-        //    重复四元组被 OS 拒绝——02 §5.2 实现备注）
-        fleet._connects.Add(fleet.VolleyAsync(bindAddress, localPortL, target, concurrency,
+        // b. N 条并发 connect（扇形+波次补射+可选开火闸）：slot i 瞄 targets[i % count]；
+        //    每波首条在 L 槽空闲时 bind L（02 §5.2③b），其余 bind 0（不同本地端口，避免同源
+        //    端口×同目标端口的重复四元组被 OS 拒绝——02 §5.2 实现备注）
+        fleet._connects.Add(fleet.VolleyAsync(bindAddress, localPortL, targets, concurrency,
             volleyGate, waveInterval ?? WaveInterval));
 
         // c. 直连探测（§5.4）：每目标独立拒连重试（bind 0；成功即入池扇出）
@@ -153,13 +156,14 @@ internal sealed class TcpPunchFleet : IAsyncDisposable
     /// <summary>诊断：已发波次数（池收尾线与 FailedConnects 对照：RST 密度=failed/(waves×N)）。</summary>
     public int Waves => Volatile.Read(ref _waves);
 
-    /// <summary>波次补射（02 §5.2③b′）：先过开火闸（null=建池即打），随后打洞窗内每
+    /// <summary>波次补射（02 §5.2③b′/⑥）：先过开火闸（null=建池即打），随后打洞窗内每
     /// <paramref name="waveInterval"/> 重建一波 N 条 connect——每波全新 socket=全新 SYN 预算，
     /// 任意一波落在「对端瞄准点槽位存活（SYN_SENT 重传窗）」时段即成交；死波（RST/超预算）
-    /// 由下一波接替，直至胜出（池销毁取消）或窗口收尾。L 槽规则：在飞的 L 槽 connect 已结束
+    /// 由下一波接替，直至胜出（池销毁取消）或窗口收尾。slot i 瞄 <paramref name="targets"/>[i % count]
+    ///（扇形：slot↔偏移绑定稳定，波次重打同一扇）。L 槽规则：在飞的 L 槽 connect 已结束
     /// 才由本波首条重新 bind L（在飞时重绑=重复四元组被 OS 拒；已建立后重绑同理拒但无害）。
     /// 子任务由本循环收口：胜出/收尾取消后统一 await，异常不外冒（DisposeAsync 经 _connects 级联等待）。</summary>
-    private async Task VolleyAsync(IPAddress? bindAddress, int localPortL, IPEndPoint target,
+    private async Task VolleyAsync(IPAddress? bindAddress, int localPortL, IReadOnlyList<IPEndPoint> targets,
         int concurrency, Func<CancellationToken, Task>? gate, TimeSpan waveInterval)
     {
         var children = new List<Task>();
@@ -178,7 +182,7 @@ internal sealed class TcpPunchFleet : IAsyncDisposable
                     s.Bind(new IPEndPoint(bindAddress ?? IPAddress.Any, useL ? localPortL : 0));
                     if (wave == 1 && useL)
                         _firstConnectLocalPort = ((IPEndPoint)s.LocalEndPoint!).Port;
-                    var slot = ConnectOneAsync(s, target);
+                    var slot = ConnectOneAsync(s, targets[i % targets.Count]);
                     if (useL) lSlot = slot;
                     children.Add(slot);
                 }

@@ -125,6 +125,7 @@ public static class PcpCodec
         nameof(Invalidation) => MsgType.Invalidation,
         nameof(PunchEndpoint) => MsgType.PunchEndpoint,
         nameof(PunchFire) => MsgType.PunchFire,
+        nameof(PunchStart) or nameof(PunchStartGo) => MsgType.PunchStart,
         nameof(ErrorMessage) => MsgType.Error,
         _ => null,
     };

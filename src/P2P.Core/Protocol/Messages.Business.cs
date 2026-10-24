@@ -562,6 +562,33 @@ public sealed record PunchFire(
     [property: Key(2)] byte MsgType,
     [property: Key(3)] Guid SessionId) : IPcpMessage;
 
+/// <summary>0x78 C→S：晚探测起跑申请（02 §5.2⑥，2026-10-24）——**不携带端点**（对端端点经
+/// STUN-TCP 交换事务晚收集，探测贴近开火、基准映射被探针连接钉活）。服务端受理即同刻向双端
+/// 下发 PunchStartGo（A=请求应答、B=推送），双端并行起 STUN-TCP 交换连接。主动类（passive 拒绝）。
+/// 旧服务端未知 0x78 静默丢弃（02 §7）→ 客户端 2s 无应答即降级旧 0x70 流程（混布自由升级序）。</summary>
+[MessagePackObject]
+public sealed record PunchStart(
+    [property: Key(0)] uint Seq,
+    [property: Key(1)] ulong TimestampMs,
+    [property: Key(2)] byte MsgType,
+    [property: Key(3)] Guid TargetDeviceId,
+    [property: Key(4)] Guid? TriggerMappingId,
+    [property: Key(5)] string Proto,
+    [property: Key(6)] byte? PunchConcurrency = null) : IPcpMessage;
+
+/// <summary>0x78 S→C（双端）：起跑指令——A 侧为 0x78 请求的即时应答（同族配对）、B 侧为推送；
+/// 载荷={sessionId, 对端设备信息(含 staticPubKey), N, relayAllowed}。收到的端立即开 STUN-TCP
+/// 交换连接（请求带 sessionId+本机候选，响应带对端映射端点+对端候选=开火锚点）。</summary>
+[MessagePackObject]
+public sealed record PunchStartGo(
+    [property: Key(0)] uint Seq,
+    [property: Key(1)] ulong TimestampMs,
+    [property: Key(2)] byte MsgType,
+    [property: Key(3)] Guid SessionId,
+    [property: Key(4)] PeerInfo Peer,
+    [property: Key(5)] byte PunchCount,
+    [property: Key(6)] bool RelayAllowed) : IPcpMessage;
+
 /// <summary>0x74 C→S：申请中继会话（打洞失败且目标设备回退开启，OQ-10）。</summary>
 [MessagePackObject]
 public sealed record RelayAllocate(

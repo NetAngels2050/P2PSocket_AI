@@ -406,6 +406,9 @@ internal sealed class NullPuncher : IPuncher
 
     public Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default)
         => Task.FromResult(PunchOutcome.Failure(invite.Peer.DeviceId, "export_ts"));
+
+    public Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+        => Task.FromResult(PunchOutcome.Failure(go.Peer.DeviceId, "go_not_supported"));
 }
 
 /// <summary>网卡空实现（仅装配路由，永不调用）。</summary>

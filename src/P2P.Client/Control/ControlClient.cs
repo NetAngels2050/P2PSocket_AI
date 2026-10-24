@@ -596,6 +596,7 @@ public sealed class ControlClient : IAsyncDisposable
         MsgType.MappingDelete => PcpCodec.Decode<MappingDeleteAck>(msgpack),
         MsgType.PunchRequest => PcpCodec.Decode<PunchRequestAck>(msgpack),
         MsgType.PunchInvite => PcpCodec.Decode<PunchInvite>(msgpack), // S→C 推送（M1-26 挂载处理）
+        MsgType.PunchStart => PcpCodec.Decode<PunchStartGo>(msgpack), // 0x78 S→C 恒为 Go（请求应答/被邀请方推送，02 §5.2⑥）
         MsgType.PunchRetry => PcpCodec.Decode<PunchRetry>(msgpack),  // 0x73 请求-应答同族 + 被邀请方推送（M2-19）
         MsgType.UpdateInfo => PcpCodec.Decode<UpdateInfoResponse>(msgpack), // 0x03 已建立会话同族应答（M2-26）
         // S→C 方向 0x74 恒为 Grant（M2-17 分配应答/对端侧推送接续，02 §6.1②；事件面接线 M2-15）

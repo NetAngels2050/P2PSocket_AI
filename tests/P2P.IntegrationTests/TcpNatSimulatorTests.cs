@@ -13,10 +13,10 @@ namespace P2P.IntegrationTests;
 /// 映射分配/过滤行为符合定义）。拓扑（单宿主机回环别名，09 §2.2）：模拟公网 127.0.0.1｜
 /// C1=127.0.0.4（子段 20001..，SymmetricSequential）｜C2=127.0.0.5（子段 20101..，
 /// SymmetricSequential）｜C3=127.0.0.6（子段 20201..，SymmetricRandom）。<br/>
-/// 代数（02 §5.2 端口预测，N=并发数、P=探测所得映射端口）：对端 c_k 的外部端口为 P+1+k，
-/// 打洞目标 T=P+(N−1)（N=1 时 T=P 即探测端口，走 listen 交付）。对称双端下 A.c_{N−2} 的
-/// 源端口恰为 A_P+N−1=B 的 c_{N−2} 的目的端口 → 四元组交叉命中（M2-30 断言该代数在模拟器成立；
-/// 全链路 N=1~5 命中矩阵归 M2-31 A-5）。
+/// 代数（02 §5.2⑥ 扇形口径，N=并发数、P=探测所得映射端口）：对端 connect 瞄 P+[0..N−1] 全扇——
+/// 扇首 +0=探测端口，走探测映射 listen 交付（扰动窗内毒化则该腿必 refused）；非扇首腿依赖出站映射
+/// APDF 身份过滤 rendezvous（对称双端 slot↔偏移对齐时四元组交叉命中）。本机制测试以显式端口验证
+/// 交付/过滤/记录本身（M2-30 断言该代数在模拟器成立；全链路 N=1~5 命中矩阵归 M2-31 A-5）。
 /// </summary>
 public sealed class TcpNatSimulatorTests : IAsyncLifetime
 {

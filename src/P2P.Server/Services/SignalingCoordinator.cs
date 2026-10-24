@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.EntityFrameworkCore;
 using P2P.Core.Protocol;
 using P2P.Server.Data;
@@ -38,7 +39,8 @@ public sealed class SignalingCoordinator : IAsyncDisposable
     private readonly object _gate = new();
     private readonly Dictionary<Guid, PunchSession> _sessions = [];   // sessionId → 活跃会话
     private readonly Dictionary<Guid, RelayLedgerEntry> _relayLedger = []; // 结束会话台账（0x74 对端解析 + 0x72 统计上下文）
-    private readonly Queue<(ControlSession Session, PunchRequest Msg)> _pending = new(); // 排队申请
+    private readonly Queue<(ControlSession Session, IPcpMessage Msg)> _pending = new(); // 排队申请（0x70 PunchRequest / 0x78 PunchStart）
+    private readonly Dictionary<Guid, ExchangeSession> _exchanges = []; // 0x78 晚探测交换（02 §5.2⑥）：sessionId → 双端到齐状态
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _reaper;
     private int _disposed; // 宿主 StopAsync 与容器释放各调一次（幂等）
@@ -64,17 +66,35 @@ public sealed class SignalingCoordinator : IAsyncDisposable
         public required Guid SessionId { get; init; }
         public required Guid InitiatorId { get; init; }
         public required Guid TargetId { get; init; }
-        public required ControlSession Initiator { get; init; }   // A 连接（收延后 Ack）
-        public required ControlSession Target { get; init; }      // B 连接（收 PunchInvite）
+        public required ControlSession Initiator { get; init; }   // A 连接（收延后 Ack / 0x78 Go 应答）
+        public required ControlSession Target { get; init; }      // B 连接（收 PunchInvite / 0x78 Go 推送）
         public required PeerInfo InitiatorInfo { get; init; }
         public required PeerInfo TargetInfo { get; init; }
-        public required EndpointPair RequesterEndpoints { get; init; }
+        public required EndpointPair? RequesterEndpoints { get; init; } // 0x70 携带；0x78 晚探测=null（端点经 STUN 交换收齐）
         public required P2P.Core.Protocol.Endpoint[]? RequesterCandidates { get; init; } // 0x70 直连候选透传（§5.4，纯存转）
         public required string Proto { get; init; }               // 0x70 载荷（udp|tcp，M2-08 统计）
         public required byte PunchCount { get; init; }
         public required bool RelayAllowed { get; init; }               // relay_enabled 合成（M2-07）
         public required DateTimeOffset CreatedAt { get; init; }
     }
+
+    /// <summary>0x78 晚探测交换会话（02 §5.2⑥）：双端 STUN-TCP 交换连接到齐状态——
+    /// 先到者挂起等待，后到者同刻完成双方 TCS（两条连接上背靠背写对端端点=开火锚点）。</summary>
+    private sealed class ExchangeSession
+    {
+        public required PunchSession Session { get; init; }
+        public required CancellationTokenSource ReaperCts { get; init; } // 收割取消等待者（StunService 侧断连）
+        public PunchExchangeRequest? Initiator { get; set; }            // A 侧交换注册（观测端点+候选）
+        public PunchExchangeRequest? Target { get; set; }               // B 侧
+        public required TaskCompletionSource<PunchExchangePeer> InitiatorPeer { get; init; }
+        public required TaskCompletionSource<PunchExchangePeer> TargetPeer { get; init; }
+    }
+
+    /// <summary>打洞交换注册（StunService → 本类，02 §5.2⑥）：某端在 3478/TCP 交换连接上被观测的端点+候选。</summary>
+    public sealed record PunchExchangeRequest(Guid SessionId, Guid DeviceId, IPEndPoint Observed, IPEndPoint[] Candidates);
+
+    /// <summary>交换所得对端信息（应答载荷：对端观测端点+候选）。</summary>
+    public sealed record PunchExchangePeer(IPEndPoint Endpoint, IPEndPoint[] Candidates);
 
     /// <summary>结束会话台账条目（120s）：0x74/0x73 对端解析 + 0x72 统计上下文（proto/N/起始时刻）。</summary>
     public sealed record RelayLedgerEntry(
@@ -169,6 +189,146 @@ public sealed class SignalingCoordinator : IAsyncDisposable
             s.SessionId, s.InitiatorInfo, s.RequesterEndpoints, s.PunchCount, s.RelayAllowed,
             LocalCandidates: s.RequesterCandidates);
         await SafePushAsync(s.Target, invite); // B 中途掉线：由 reaper 超时收尾
+    }
+
+    // ── 0x78 PunchStart（晚探测起跑，02 §5.2⑥，2026-10-24）─────────────
+
+    /// <summary>晚探测起跑：不携带端点——受理即同刻向双端下发 PunchStartGo（A=请求应答、B=推送），
+    /// 双端并行开 STUN-TCP 交换连接（端口经 <see cref="WaitForPunchExchangeAsync"/> 晚收集互换，
+    /// 探测贴近开火、基准映射被探针连接钉活）。仅 tcp（UDP 打洞路径不变）。</summary>
+    public async Task HandlePunchStartAsync(ControlSession session, PunchStart msg)
+    {
+        if (msg.Proto != "tcp")
+        {
+            await session.SendErrorAsync(ErrorCode.BadRequest, "proto_not_supported");
+            return;
+        }
+        var verdict = await _authorizer.CheckPunchAsync(session, msg.TargetDeviceId, msg.TriggerMappingId);
+        if (!verdict.Allowed)
+        {
+            await _audit.WriteAsync("punch_deny", session.DeviceId,
+                detail: new { msg.TargetDeviceId, verdict.Reason, verdict.Code });
+            await session.SendErrorAsync(verdict.Code, verdict.Reason);
+            return;
+        }
+        var targetSession = _registry.TryGet(msg.TargetDeviceId);
+        if (targetSession is null)
+        {
+            await session.SendErrorAsync(ErrorCode.TargetOffline, "target_offline");
+            return;
+        }
+
+        lock (_gate)
+        {
+            // 同设备对去重/busy 排队：与 0x70 共用一套口径（设备对互斥语义不因流程而异）
+            if (_sessions.Values.Any(s =>
+                    (s.InitiatorId == session.DeviceId && s.TargetId == msg.TargetDeviceId)
+                    || (s.InitiatorId == msg.TargetDeviceId && s.TargetId == session.DeviceId)))
+                return;
+            if (IsDeviceBusy(session.DeviceId) || IsDeviceBusy(msg.TargetDeviceId))
+            {
+                _pending.Enqueue((session, msg));
+                return;
+            }
+        }
+
+        await StartExchangeSessionAsync(session, msg, targetSession);
+    }
+
+    private async Task StartExchangeSessionAsync(ControlSession initiator, PunchStart msg, ControlSession target)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var devices = await db.Devices.AsNoTracking()
+            .Where(d => d.Id == msg.TargetDeviceId || d.Id == initiator.DeviceId)
+            .ToDictionaryAsync(d => d.Id);
+        if (!devices.TryGetValue(initiator.DeviceId, out var a) ||
+            !devices.TryGetValue(msg.TargetDeviceId, out var b))
+            return; // 设备记录消失（解绑竞态）：静默丢弃，A 侧由交换超时兜底
+
+        var s = new PunchSession
+        {
+            SessionId = Guid.NewGuid(),
+            InitiatorId = a.Id,
+            TargetId = b.Id,
+            Initiator = initiator,
+            Target = target,
+            InitiatorInfo = new PeerInfo(a.Id, a.DeviceName, a.RemoteCode, a.StaticPubKey),
+            TargetInfo = new PeerInfo(b.Id, b.DeviceName, b.RemoteCode, b.StaticPubKey),
+            RequesterEndpoints = null, // 晚探测：端点经 STUN 交换收齐（02 §5.2⑥）
+            RequesterCandidates = null,
+            Proto = msg.Proto,
+            PunchCount = PunchPolicy.Normalize(msg.PunchConcurrency),
+            RelayAllowed = new ServerConfigStore(db).GetBool("relay_enabled")
+                && (_rateLimiter?.HasBudget() ?? true),
+            CreatedAt = _time.GetLocalNow(),
+        };
+
+        lock (_gate)
+        {
+            if (IsDeviceBusy(s.InitiatorId) || IsDeviceBusy(s.TargetId))
+            {
+                _pending.Enqueue((initiator, msg));
+                return;
+            }
+            _sessions[s.SessionId] = s;
+            _exchanges[s.SessionId] = new ExchangeSession
+            {
+                Session = s,
+                ReaperCts = new CancellationTokenSource(),
+                InitiatorPeer = CreatePeerTcs(),
+                TargetPeer = CreatePeerTcs(),
+            };
+        }
+
+        // ①② 同刻背靠背双推（开跑指令）：B 推送 + A 请求应答——双端并行起 STUN 交换连接
+        await SafePushAsync(target, new PunchStartGo(target.NextSeq(), target.ServerTimestamp(),
+            MsgType.PunchStart, s.SessionId, s.InitiatorInfo, s.PunchCount, s.RelayAllowed));
+        await SafePushAsync(initiator, new PunchStartGo(initiator.NextSeq(), initiator.ServerTimestamp(),
+            MsgType.PunchStart, s.SessionId, s.TargetInfo, s.PunchCount, s.RelayAllowed));
+    }
+
+    private static TaskCompletionSource<PunchExchangePeer> CreatePeerTcs()
+        => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>打洞交换等待（StunService 3478/TCP 交换事务 → 本类，02 §5.2⑥）：
+    /// 注册本端观测端点+候选；先到者挂起等对端，后到者**同刻完成双方 TCS**（两条连接上背靠背
+    /// 写响应=双端开火锚点，时刻差≈投递差）并收尾会话入台账（0x74/0x72 上下文）。
+    /// 返回 null=会话未知/重复注册/非参与者/收割取消（StunService 静默断连，客户端超时兜底）。</summary>
+    public async Task<PunchExchangePeer?> WaitForPunchExchangeAsync(PunchExchangeRequest req, CancellationToken ct)
+    {
+        TaskCompletionSource<PunchExchangePeer> mine;
+        CancellationTokenSource reaperCts;
+        bool completed = false;
+        lock (_gate)
+        {
+            if (!_exchanges.TryGetValue(req.SessionId, out var es)) return null;
+            var isInitiator = req.DeviceId == es.Session.InitiatorId;
+            if (!isInitiator && req.DeviceId != es.Session.TargetId) return null;
+            if (isInitiator ? es.Initiator is not null : es.Target is not null) return null; // 重复注册
+            if (isInitiator) es.Initiator = req; else es.Target = req;
+            mine = isInitiator ? es.InitiatorPeer : es.TargetPeer;
+            reaperCts = es.ReaperCts;
+            if (es.Initiator is not null && es.Target is not null)
+            {
+                // 双端到齐：同刻互发对端信息 + 会话收尾（发起者台账=0x74/0x72 上下文，与 0x76 路径同构）
+                es.InitiatorPeer.TrySetResult(new PunchExchangePeer(es.Target.Observed, es.Target.Candidates));
+                es.TargetPeer.TrySetResult(new PunchExchangePeer(es.Initiator.Observed, es.Initiator.Candidates));
+                _exchanges.Remove(req.SessionId);
+                _sessions.Remove(req.SessionId);
+                RetainForRelayNoLock(es.Session);
+                completed = true;
+            }
+        }
+        if (completed) await ProcessQueueAsync();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, reaperCts.Token);
+        try
+        {
+            return await mine.Task.WaitAsync(linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return null; // 收割/服务停机/连接侧超时：静默，客户端超时兜底
+        }
     }
 
     // ── 0x76 PunchEndpoint（被邀请方 B 回传端点）───────────────────────
@@ -301,17 +461,17 @@ public sealed class SignalingCoordinator : IAsyncDisposable
             s.InitiatorId, s.TargetId, s.Proto, s.PunchCount, s.CreatedAt,
             _time.GetLocalNow() + RelayLedgerTtl);
 
-    /// <summary>排队申请推进：A、B 均空闲者依次启动。</summary>
+    /// <summary>排队申请推进：A、B 均空闲者依次启动（0x70 旧流程 / 0x78 晚探测按消息类型分发）。</summary>
     private async Task ProcessQueueAsync()
     {
-        List<(ControlSession Session, PunchRequest Msg)> ready = [];
+        List<(ControlSession Session, IPcpMessage Msg)> ready = [];
         lock (_gate)
         {
-            var retries = new Queue<(ControlSession, PunchRequest)>();
+            var retries = new Queue<(ControlSession, IPcpMessage)>();
             while (_pending.Count > 0)
             {
                 var item = _pending.Dequeue();
-                if (!IsDeviceBusy(item.Session.DeviceId) && !IsDeviceBusy(item.Msg.TargetDeviceId))
+                if (!IsDeviceBusy(item.Session.DeviceId) && !IsDeviceBusy(TargetOf(item.Msg)))
                     ready.Add(item);
                 else
                     retries.Enqueue(item); // 仍忙：保留（维持到达顺序）
@@ -320,15 +480,30 @@ public sealed class SignalingCoordinator : IAsyncDisposable
         }
         foreach (var (session, msg) in ready)
         {
-            var target = _registry.TryGet(msg.TargetDeviceId);
+            var target = _registry.TryGet(TargetOf(msg));
             if (target is null)
             {
                 await session.SendErrorAsync(ErrorCode.TargetOffline, "target_offline");
                 continue;
             }
-            await StartSessionAsync(session, msg, target);
+            switch (msg)
+            {
+                case PunchStart punchStart:
+                    await StartExchangeSessionAsync(session, punchStart, target);
+                    break;
+                case PunchRequest punchRequest:
+                    await StartSessionAsync(session, punchRequest, target);
+                    break;
+            }
         }
     }
+
+    private static Guid TargetOf(IPcpMessage msg) => msg switch
+    {
+        PunchStart ps => ps.TargetDeviceId,
+        PunchRequest pr => pr.TargetDeviceId,
+        _ => throw new InvalidOperationException($"排队消息类型不支持：{msg.GetType().Name}"),
+    };
 
     private bool IsDeviceBusy(Guid deviceId)
         => _sessions.Values.Any(s => s.InitiatorId == deviceId || s.TargetId == deviceId);
@@ -365,6 +540,9 @@ public sealed class SignalingCoordinator : IAsyncDisposable
                     {
                         _sessions.Remove(s.SessionId);
                         RetainForRelayNoLock(s); // 超时收尾同样可中继（0x76 未达≠不可回退，M2-07）
+                        // 0x78 交换未收齐（对端旧版/丢失）：取消挂起等待者（StunService 断连、客户端超时兜底）
+                        if (_exchanges.Remove(s.SessionId, out var ex))
+                            ex.ReaperCts.Cancel(); // 仅 Cancel 不 Dispose：等待者 linked cts 仍持 token 引用
                     }
                     foreach (var stale in _relayLedger.Where(kv => kv.Value.ExpiresAt <= now)
                                  .Select(kv => kv.Key).ToList())

@@ -20,6 +20,12 @@ public static class StunCodec
     public const ushort AttrXorMappedAddress = 0x0020;
     public const ushort AttrDeviceAuth = 0x8020;
 
+    // 打洞交换属性（02 §5.2⑥，2026-10-24；comprehension-optional 区段 0x8000+——旧端忽略不炸）
+    public const ushort AttrPunchSession = 0x8021;    // 请求属性：16B sessionId（TCP 连接即打洞交换事务）
+    public const ushort AttrCandidates = 0x8022;      // 请求/响应属性：本机直连候选 [u8 计数][6B×n：addr4B+port2B 大端]
+    public const ushort AttrPeerAddress = 0x8023;     // 响应属性：对端观测端点（明文地址 8B，与 RESPONSE-ORIGIN 同构）
+    public const ushort AttrPeerCandidates = 0x8024;  // 响应属性：对端候选（同 CANDIDATES 编码）
+
     // RFC5780 NAT 行为发现属性（M3-15，05 §7.2；值按 RFC 5780 定值回填 02 §3）
     public const ushort AttrChangeRequest = 0x0003;   // 请求属性：4B flags（服务端从另一端点回包的载体）
     public const ushort AttrResponseOrigin = 0x802B;  // 响应属性：实际回包源（明文地址 8B）
@@ -38,9 +44,12 @@ public static class StunCodec
     // ── 组包 ─────────────────────────────────────────────────────────────
 
     /// <summary>组 Binding Request，携带 DEVICE-AUTH（02 §3.2：HMAC(deviceSecret, deviceId|nonce|ts|transactionId)）。
-    /// changeFlags 非 null 时追加 CHANGE-REQUEST 属性（M3-15 RFC5780 filtering 测试；HMAC 输入不含属性区，认证不受影响）。</summary>
+    /// changeFlags 非 null 时追加 CHANGE-REQUEST 属性（M3-15 RFC5780 filtering 测试；HMAC 输入不含属性区，认证不受影响）。
+    /// punchSession 非 null 时追加 PUNCH-SESSION+CANDIDATES（02 §5.2⑥ 打洞交换事务：服务端收齐双端后
+    /// 在两条连接上同刻回对端端点——连接保持打开、基准映射被钉活）。</summary>
     public static byte[] BuildBindingRequest(ReadOnlySpan<byte> transactionId, Guid deviceId,
-        ReadOnlySpan<byte> deviceSecret, ulong tsMs, ReadOnlySpan<byte> nonce16, ushort? changeFlags = null)
+        ReadOnlySpan<byte> deviceSecret, ulong tsMs, ReadOnlySpan<byte> nonce16, ushort? changeFlags = null,
+        Guid? punchSession = null, IReadOnlyList<IPEndPoint>? candidates = null)
     {
         if (transactionId.Length != TransactionIdLen) throw new ArgumentException("事务 ID 须 12B");
         if (nonce16.Length != 16) throw new ArgumentException("nonce 须 16B");
@@ -57,28 +66,51 @@ public static class StunCodec
         Mac.HmacSha256(deviceSecret, macInput).CopyTo(auth.AsSpan(40));
 
         var changeLen = changeFlags is null ? 0 : 4 + 4; // 属性头 4B + flags 4B（定长无补位）
-        var wire = new byte[HeaderLen + 4 + Pad4(DeviceAuthValueLen) + changeLen];
-        WriteHeader(wire, BindingRequest, transactionId, attrLen: 4 + DeviceAuthValueLen + changeLen);
+        var sessionLen = punchSession is null ? 0 : 4 + Pad4(16)
+            + (candidates is null || candidates.Count == 0 ? 0 : 4 + Pad4(CandidatesValueLen(candidates.Count)));
+        var wire = new byte[HeaderLen + 4 + Pad4(DeviceAuthValueLen) + changeLen + sessionLen];
+        WriteHeader(wire, BindingRequest, transactionId,
+            attrLen: 4 + DeviceAuthValueLen + changeLen + sessionLen);
         WriteAttrHeader(wire.AsSpan(HeaderLen), AttrDeviceAuth, DeviceAuthValueLen);
         auth.CopyTo(wire.AsSpan(HeaderLen + 4));
+        var offset = HeaderLen + 4 + Pad4(DeviceAuthValueLen);
         if (changeFlags is not null)
         {
-            var offset = HeaderLen + 4 + Pad4(DeviceAuthValueLen);
             WriteAttrHeader(wire.AsSpan(offset), AttrChangeRequest, 4);
             BinaryPrimitives.WriteUInt32BigEndian(wire.AsSpan(offset + 4, 4), changeFlags.Value);
+            offset += 8;
+        }
+        if (punchSession is not null)
+        {
+            WriteAttrHeader(wire.AsSpan(offset), AttrPunchSession, 16);
+            punchSession.Value.ToByteArray().CopyTo(wire.AsSpan(offset + 4, 16));
+            offset += 4 + Pad4(16);
+            if (candidates is not null && candidates.Count > 0)
+            {
+                var value = EncodeCandidates(candidates);
+                WriteAttrHeader(wire.AsSpan(offset), AttrCandidates, (ushort)value.Length);
+                value.CopyTo(wire.AsSpan(offset + 4));
+            }
         }
         return wire;
     }
 
     /// <summary>组 Binding Success Response：XOR-MAPPED-ADDRESS + 可选 RFC5780 属性（M3-15）——
-    /// otherAddress=OTHER-ADDRESS（另一端点）、responseOrigin=RESPONSE-ORIGIN（本包实际回包源）；均缺省时输出与 M1 形状逐字节一致。</summary>
+    /// otherAddress=OTHER-ADDRESS（另一端点）、responseOrigin=RESPONSE-ORIGIN（本包实际回包源）；均缺省时输出与 M1 形状逐字节一致。
+    /// peerAddress/peerCandidates（02 §5.2⑥ 打洞交换）：对端观测端点+对端候选——双端到齐时随各自应答同刻下发。</summary>
     public static byte[] BuildBindingResponse(ReadOnlySpan<byte> transactionId, IPAddress mapped, ushort port,
-        IPEndPoint? otherAddress = null, IPEndPoint? responseOrigin = null)
+        IPEndPoint? otherAddress = null, IPEndPoint? responseOrigin = null,
+        IPEndPoint? peerAddress = null, IReadOnlyList<IPEndPoint>? peerCandidates = null)
     {
         var value = EncodeXorMappedAddress(mapped, port);
         var other = otherAddress is null ? null : EncodePlainAddress(otherAddress.Address, (ushort)otherAddress.Port);
         var origin = responseOrigin is null ? null : EncodePlainAddress(responseOrigin.Address, (ushort)responseOrigin.Port);
-        var attrLen = 4 + value.Length + (other is null ? 0 : 4 + other.Length) + (origin is null ? 0 : 4 + origin.Length);
+        var peer = peerAddress is null ? null : EncodePlainAddress(peerAddress.Address, (ushort)peerAddress.Port);
+        var peerCands = peerCandidates is null || peerCandidates.Count == 0
+            ? null : EncodeCandidates(peerCandidates);
+        var attrLen = 4 + value.Length
+            + (other is null ? 0 : 4 + other.Length) + (origin is null ? 0 : 4 + origin.Length)
+            + (peer is null ? 0 : 4 + peer.Length) + (peerCands is null ? 0 : 4 + peerCands.Length);
         var wire = new byte[HeaderLen + attrLen];
         WriteHeader(wire, BindingSuccess, transactionId, attrLen);
         var offset = HeaderLen;
@@ -95,6 +127,18 @@ public static class StunCodec
         {
             WriteAttrHeader(wire.AsSpan(offset), AttrResponseOrigin, (ushort)origin.Length);
             origin.CopyTo(wire.AsSpan(offset + 4));
+            offset += 4 + origin.Length;
+        }
+        if (peer is not null)
+        {
+            WriteAttrHeader(wire.AsSpan(offset), AttrPeerAddress, (ushort)peer.Length);
+            peer.CopyTo(wire.AsSpan(offset + 4));
+            offset += 4 + peer.Length;
+        }
+        if (peerCands is not null)
+        {
+            WriteAttrHeader(wire.AsSpan(offset), AttrPeerCandidates, (ushort)peerCands.Length);
+            peerCands.CopyTo(wire.AsSpan(offset + 4));
         }
         return wire;
     }
@@ -102,10 +146,13 @@ public static class StunCodec
     // ── 解包 ─────────────────────────────────────────────────────────────
 
     public sealed record BindingResponse(byte[] TransactionId, IPEndPoint Mapped,
-        IPEndPoint? OtherAddress = null, IPEndPoint? ResponseOrigin = null);
+        IPEndPoint? OtherAddress = null, IPEndPoint? ResponseOrigin = null,
+        IPEndPoint? PeerEndpoint = null, IPEndPoint[]? PeerCandidates = null);
 
     /// <summary>解析 Success Response（客户端侧）：校验 magic/type，取首个 XOR-MAPPED-ADDRESS 与可选 RFC5780 属性
-    /// （OTHER-ADDRESS/RESPONSE-ORIGIN——缺失/畸形属性容忍为 null，不影响主字段）。</summary>
+    /// （OTHER-ADDRESS/RESPONSE-ORIGIN——缺失/畸形属性容忍为 null，不影响主字段）。
+    /// PEER-ADDRESS/PEER-CANDIDATES（02 §5.2⑥ 打洞交换）：对端观测端点+候选——交换事务的核心载荷，
+    /// 缺失视为非交换应答（普通探测）。</summary>
     public static bool TryParseBindingResponse(ReadOnlySpan<byte> wire, out BindingResponse? response)
     {
         response = null;
@@ -120,14 +167,72 @@ public static class StunCodec
         var addr = new byte[4]; // 逐字节与 cookie 异或后按网络序构造（IPAddress(uint) 是小端语义，不可用）
         for (var i = 0; i < 4; i++)
             addr[i] = (byte)(value[4 + i] ^ ((MagicCookie >> (24 - 8 * i)) & 0xFF));
-        IPEndPoint? other = null, origin = null;
+        IPEndPoint? other = null, origin = null, peer = null;
         if (TryGetAttribute(wire, AttrOtherAddress, out var oa) && TryDecodePlainAddress(oa, out var oep))
             other = oep;
         if (TryGetAttribute(wire, AttrResponseOrigin, out var ro) && TryDecodePlainAddress(ro, out var rep))
             origin = rep;
-        response = new BindingResponse(transactionId, new IPEndPoint(new IPAddress(addr), port), other, origin);
+        if (TryGetAttribute(wire, AttrPeerAddress, out var pa) && TryDecodePlainAddress(pa, out var pep))
+            peer = pep;
+        IPEndPoint[]? peerCands = null;
+        if (TryGetAttribute(wire, AttrPeerCandidates, out var pc) && TryDecodeCandidates(pc, out var cands))
+            peerCands = cands;
+        response = new BindingResponse(transactionId, new IPEndPoint(new IPAddress(addr), port), other, origin,
+            peer, peerCands);
         return true;
     }
+
+    // ── 打洞交换属性（02 §5.2⑥）──────────────────────────────────────
+
+    /// <summary>候选编码：[u8 计数][6B×n：addr 4B 大端 + port 2B 大端]（≤8 个，IPv4）。</summary>
+    public const int MaxCandidates = 8;
+
+    private static int CandidatesValueLen(int count) => 1 + 6 * count;
+
+    private static byte[] EncodeCandidates(IReadOnlyList<IPEndPoint> candidates)
+    {
+        var count = Math.Min(candidates.Count, MaxCandidates);
+        var value = new byte[CandidatesValueLen(count)];
+        value[0] = (byte)count;
+        for (var i = 0; i < count; i++)
+        {
+            var addr = candidates[i].Address;
+            if (addr.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) continue;
+            addr.GetAddressBytes().CopyTo(value.AsSpan(1 + 6 * i, 4));
+            BinaryPrimitives.WriteUInt16BigEndian(value.AsSpan(1 + 6 * i + 4, 2), (ushort)candidates[i].Port);
+        }
+        return value;
+    }
+
+    private static bool TryDecodeCandidates(ReadOnlySpan<byte> value, out IPEndPoint[]? candidates)
+    {
+        candidates = null;
+        if (value.Length < 1) return false;
+        var count = value[0];
+        if (count > MaxCandidates || value.Length < CandidatesValueLen(count)) return false;
+        var list = new IPEndPoint[count];
+        for (var i = 0; i < count; i++)
+        {
+            var port = BinaryPrimitives.ReadUInt16BigEndian(value.Slice(1 + 6 * i + 4, 2));
+            list[i] = new IPEndPoint(new IPAddress(value.Slice(1 + 6 * i, 4).ToArray()), port);
+        }
+        candidates = list;
+        return true;
+    }
+
+    /// <summary>提取 PUNCH-SESSION（服务端侧）：无属性/长度非 16B = 普通探测事务（false）。</summary>
+    public static bool TryGetPunchSession(ReadOnlySpan<byte> wire, out Guid sessionId)
+    {
+        sessionId = Guid.Empty;
+        if (!TryGetAttribute(wire, AttrPunchSession, out var value) || value.Length != 16) return false;
+        sessionId = new Guid(value.ToArray());
+        return true;
+    }
+
+    /// <summary>提取 CANDIDATES（服务端侧）：缺失/畸形 = 空表。</summary>
+    public static IPEndPoint[] ParseCandidates(ReadOnlySpan<byte> wire)
+        => TryGetAttribute(wire, AttrCandidates, out var value) && TryDecodeCandidates(value, out var cands)
+            ? cands ?? [] : [];
 
     /// <summary>提取 CHANGE-REQUEST flags（服务端侧，M3-15）：缺属性/畸形=0（按普通 Binding 处理）。
     /// 任一 flag 置位即要求从另一端点回包（RFC5780；单"另一端点"实现不区分 IP/Port 方向）。</summary>

@@ -216,7 +216,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var dirA = Path.Combine(_rootDir, "rt-a");
 
         // 首次启动：registered 路径阻塞至 Established+恢复完成；真实打洞器接线（STUN 不可达 → failed）
-        var runtime1 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var runtime1 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic, DisableLatePunch = true });
         var logs = new List<string>();
         runtime1.Log += logs.Add;
         await runtime1.StartAsync();
@@ -229,7 +229,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
 
         // 模拟服务停止 → 系统拉起（同 baseDir；token 随重启轮换——07 §14.2，客户端须随重启重建）
         await runtime1.DisposeAsync();
-        var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic, DisableLatePunch = true });
         await runtime2.StartAsync();
         using (var http = LocalHttp(runtime2))
         {
@@ -249,7 +249,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var dir = Path.Combine(_rootDir, "rt-auth");
 
         // 默认（webTokenAuth=false，v1.83）：不带 Bearer 的裸请求直接可用（出厂形态）
-        var runtime1 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic });
+        var runtime1 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic, DisableLatePunch = true });
         await runtime1.StartAsync();
         using (var bare = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime1.WebPort}") })
             Assert.Equal("running", await GetPhaseAsync(bare));
@@ -262,7 +262,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         on.WebTokenAuth = true;
         await store.SaveAsync(on);
 
-        var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic });
+        var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic, DisableLatePunch = true });
         await runtime2.StartAsync();
         using (var bare = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{runtime2.WebPort}") })
         using (var denied = await bare.GetAsync("/api/system/state"))
@@ -310,7 +310,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var a = await SeedRegisteredWithMappingAsync("lr-a", b, createSharedGroup: false);
         var dirA = Path.Combine(_rootDir, "lr-a");
 
-        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic, DisableLatePunch = true });
         var logs = new List<string>();
         runtime.Log += m => { lock (logs) logs.Add(m); };
         await runtime.StartAsync();
@@ -360,7 +360,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var dirA = Path.Combine(_rootDir, "p2-a");
 
         // 第一段：登录（凭据落盘）→ 恢复到位
-        var runtime1 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var runtime1 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic, DisableLatePunch = true });
         var logs1 = new List<string>();
         runtime1.Log += m => { lock (logs1) logs1.Add(m); };
         await runtime1.StartAsync();
@@ -396,7 +396,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         Assert.Contains(username, await File.ReadAllTextAsync(Path.Combine(dirA, "state.json")));
 
         // 第二段：重启 → 记住的凭据自动重放 → 登录态+可见性就位 → 映射恢复（无手工登录）
-        var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var runtime2 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic, DisableLatePunch = true });
         var logs2 = new List<string>();
         runtime2.Log += m => { lock (logs2) logs2.Add(m); };
         await runtime2.StartAsync();
@@ -417,7 +417,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
             }
         }
         await runtime2.DisposeAsync();
-        var runtime3 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var runtime3 = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic, DisableLatePunch = true });
         var logs3 = new List<string>();
         runtime3.Log += m => { lock (logs3) logs3.Add(m); };
         await runtime3.StartAsync();
@@ -441,7 +441,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var a = await SeedRegisteredWithMappingAsync("rc-a", b, createSharedGroup: false);
         var dirA = Path.Combine(_rootDir, "rc-a");
 
-        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic, DisableLatePunch = true });
         var logs = new List<string>();
         runtime.Log += m => { lock (logs) logs.Add(m); };
         await runtime.StartAsync();
@@ -510,7 +510,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var settings = new SettingsStore(dir);
         await settings.SaveAsync(new ClientSettings { ServerAddrs = [], LocalWebPort = FreePort() });
 
-        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic });
+        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic, DisableLatePunch = true });
         await runtime.StartAsync(); // 未注册分支：启动即返回（向导模式）
         using var http = LocalHttp(runtime);
         try
@@ -547,7 +547,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         var dirA = Path.Combine(_rootDir, "un-a");
 
         // 起服务：映射恢复=监听已绑（punch→failed 确定性，同用例①口径）
-        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic });
+        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dirA, NicOverride = _nic, DisableLatePunch = true });
         await runtime.StartAsync();
         using (var http = LocalHttp(runtime))
             await WaitStateAsync(http, "failed");
@@ -584,7 +584,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
     {
         var a = await SeedRegisteredWithMappingAsync("un-keep", null);
         var dir = Path.Combine(_rootDir, "un-keep");
-        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic });
+        var runtime = new ClientRuntime(new ClientRuntimeOptions { BaseDir = dir, NicOverride = _nic, DisableLatePunch = true });
         await runtime.StartAsync();
         await runtime.DisposeAsync();
 
@@ -621,6 +621,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
 
         var runtime = new ClientRuntime(new ClientRuntimeOptions
         {
+            DisableLatePunch = true, // 本夹具无 STUN 交换端点（旧流程语义）
             BaseDir = dir,
             NicOverride = _nic,
             // 注入版本拒答：Hello 协议版本越界（服务端 5004 → 0x03 受理窗）
@@ -667,6 +668,7 @@ public sealed class ClientRuntimeIntegrationTests : IAsyncLifetime
         await SeedRegisteredWithMappingAsync("rt-degraded", null);
         var runtime = new ClientRuntime(new ClientRuntimeOptions
         {
+            DisableLatePunch = true, // 本夹具无 STUN 交换端点（旧流程语义）
             BaseDir = Path.Combine(_rootDir, "rt-degraded"),
             NicOverride = new FailingNicManager(),
         });

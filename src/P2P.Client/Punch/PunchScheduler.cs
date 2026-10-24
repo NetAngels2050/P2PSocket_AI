@@ -65,6 +65,10 @@ public sealed class PunchScheduler : IAsyncDisposable
     public Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default)
         => _puncher.RespondAsync(invite, ct);
 
+    /// <summary>被邀请方路径（0x78 PunchStartGo，02 §5.2⑥）：同 0x71——不进本地队列直接执行。</summary>
+    public Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+        => _puncher.RespondGoAsync(go, ct);
+
     private async Task LoopAsync(CancellationToken ct)
     {
         try

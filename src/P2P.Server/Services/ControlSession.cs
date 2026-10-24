@@ -245,7 +245,7 @@ public sealed class ControlSession : IAsyncDisposable
             or MsgType.GroupRemoveMember
             or MsgType.GroupUpdate or MsgType.GroupDissolve or MsgType.MappingUpsert or MsgType.MappingDelete
             or MsgType.LanSegmentsUpsert or MsgType.MappingStatus or MsgType.PunchRequest or MsgType.PunchInvite or MsgType.PunchResult
-            or MsgType.PunchEndpoint or MsgType.PunchRetry or MsgType.RelayAllocate
+            or MsgType.PunchEndpoint or MsgType.PunchRetry or MsgType.RelayAllocate or MsgType.PunchStart
             or MsgType.StatsReport or MsgType.Error;
 
     private static IPcpMessage DecodeTyped(byte[] msgpack, byte msgType) => msgType switch
@@ -277,6 +277,7 @@ public sealed class ControlSession : IAsyncDisposable
         MsgType.PunchResult => PcpCodec.Decode<PunchResult>(msgpack),          // 0x72 打洞结果（M2-08）
         MsgType.PunchRequest => PcpCodec.Decode<PunchRequest>(msgpack),
         MsgType.PunchEndpoint => PcpCodec.Decode<PunchEndpoint>(msgpack),
+        MsgType.PunchStart => PcpCodec.Decode<PunchStart>(msgpack), // 0x78 晚探测起跑（C→S 请求方向，02 §5.2⑥）
         MsgType.PunchRetry => PcpCodec.Decode<PunchRetry>(msgpack), // 0x73 回切协调（M2-19）
         MsgType.RelayAllocate => PcpCodec.Decode<RelayAllocate>(msgpack),
         MsgType.Error => PcpCodec.Decode<ErrorMessage>(msgpack),

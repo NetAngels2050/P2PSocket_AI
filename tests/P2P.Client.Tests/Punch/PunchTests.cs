@@ -431,6 +431,9 @@ public sealed class PunchSchedulerTests
 
         public Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default)
             => throw new NotSupportedException("调度器测试不覆盖被动侧");
+
+        public Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+            => Task.FromResult(PunchOutcome.Failure(go.Peer.DeviceId, "go_not_supported"));
     }
 
     private static async Task UntilAsync(Func<bool> condition, string what, TimeSpan? timeout = null)

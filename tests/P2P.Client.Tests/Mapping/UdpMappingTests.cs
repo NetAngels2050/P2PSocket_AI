@@ -181,6 +181,9 @@ public sealed class UdpMappingTests
 
         public Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default)
             => throw new NotSupportedException();
+
+        public Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+            => Task.FromResult(PunchOutcome.Failure(go.Peer.DeviceId, "go_not_supported"));
     }
 
     private MappingState StateOf(Topology topo, Guid mappingId)

@@ -25,6 +25,7 @@ using P2P.Client.Control;
 using P2P.Client.Tunnel;
 using P2P.Core.Crypto;
 using P2P.Core.Protocol;
+using P2P.Core.Stun;
 using P2P.Core.Tunnel;
 using P2P.Nic;
 
@@ -56,6 +57,10 @@ public sealed record PunchOptions
     /// <summary>B 侧 0x77 齐射锚点等待上限（02 §5.2⑤ 方案 A）：超时（旧服务端不推送/丢失）立即
     /// 开火兜底；取值≈TcpVolleyCountdown+一次控制往返——兜底路径与 A 的倒计时终点仍近似重合。</summary>
     public TimeSpan PunchFireFallbackTimeout { get; init; } = TimeSpan.FromMilliseconds(600);
+
+    /// <summary>0x78 PunchStartGo 应答等待（02 §5.2⑥）：旧服务端对未知 msgType **静默丢弃**（02 §7）
+    /// ——超时即判旧服务端，降级旧 0x70 流程（混布自由升级序）。</summary>
+    public TimeSpan PunchStartReplyTimeout { get; init; } = TimeSpan.FromSeconds(2);
 }
 
 /// <summary>打洞结果（本地事件驱动映射状态机；成功带双方端点）。
@@ -92,6 +97,10 @@ public interface IPuncher
 
     /// <summary>被邀请方：0x71 → STUN 探测 → 0x76 上报 → 立即对发起方打洞应答（不进本地队列）。</summary>
     Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default);
+
+    /// <summary>被邀请方：0x78 PunchStartGo → STUN-TCP 交换（应答即锚点）→ 扇形齐射 → 应答握手
+    ///（02 §5.2⑥ 晚探测流程 B 侧；不进本地队列）。</summary>
+    Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -132,6 +141,16 @@ public sealed class Puncher : IPuncher, IDisposable
     /// 未装配=建池即打（单测缺省，行为同旧版——时差由波次补射覆盖）。</summary>
     public delegate Task<bool> PunchFireWaiter(Guid sessionId, TimeSpan timeout, CancellationToken ct);
 
+    /// <summary>0x78 起跑申请缝（02 §5.2⑥，宿主接 ControlClient.SendRequestAsync&lt;PunchStartGo&gt;；
+    /// N 由宿主闭包取 settings 当前值，同 0x70 口径）。未装配=晚探测流程整体跳过（单测缺省）。</summary>
+    public delegate Task<PunchStartGo> PunchStartSender(Guid targetDeviceId, Guid? triggerMappingId,
+        string proto, CancellationToken ct);
+
+    /// <summary>STUN-TCP 打洞交换缝（02 §5.2⑥，宿主接 StunTcpProber.ProbeExchangeAsync）：
+    /// socket 为预绑定端口 L 的未连接句柄；**保持打开**返回（映射钉活，生命周期归调用方）。</summary>
+    public delegate Task<StunTcpProber.PunchExchange> StunTcpExchangeDelegate(Socket punchSocket,
+        Guid punchSessionId, IReadOnlyList<IPEndPoint>? candidates, CancellationToken ct);
+
     private readonly PunchRequestSender _sendPunchRequest;
     private readonly EndpointReporter _reportEndpoints;
     private readonly StunProbeDelegate _probe;
@@ -145,6 +164,8 @@ public sealed class Puncher : IPuncher, IDisposable
     private readonly Action<string>? _log; // 诊断日志缝（P4 修复：TCP 打洞计划/池收尾线，缺省静默）
     private readonly Func<IPAddress?, IReadOnlyList<IPAddress>> _localIps; // 本机 IP 枚举缝（§5.4 候选源，缺省真实枚举）
     private readonly PunchFireWaiter? _punchFireWaiter; // 0x77 锚点等待缝（§5.2⑤，缺省建池即打）
+    private readonly PunchStartSender? _sendPunchStart; // 0x78 起跑缝（§5.2⑥，缺省跳过晚探测流程）
+    private readonly StunTcpExchangeDelegate? _tcpExchange; // STUN-TCP 交换缝（§5.2⑥，缺省跳过晚探测流程）
     private int _disposed;
 
     public Puncher(PunchRequestSender sendPunchRequest, EndpointReporter reportEndpoints,
@@ -153,7 +174,8 @@ public sealed class Puncher : IPuncher, IDisposable
         StunTcpProbeDelegate? tcpProbe = null, Func<Guid, bool>? relayFallbackLookup = null,
         RelayAllocator? relayAllocator = null, LiveRelaySessionLookup? liveRelaySessionLookup = null,
         Action<string>? log = null, Func<IPAddress?, IReadOnlyList<IPAddress>>? localIpEnumerator = null,
-        PunchFireWaiter? punchFireWaiter = null)
+        PunchFireWaiter? punchFireWaiter = null, PunchStartSender? punchStartSender = null,
+        StunTcpExchangeDelegate? tcpExchange = null)
     {
         _sendPunchRequest = sendPunchRequest;
         _reportEndpoints = reportEndpoints;
@@ -168,6 +190,8 @@ public sealed class Puncher : IPuncher, IDisposable
         _liveRelaySession = liveRelaySessionLookup;
         _localIps = localIpEnumerator ?? EnumerateLocalIps;
         _punchFireWaiter = punchFireWaiter;
+        _sendPunchStart = punchStartSender;
+        _tcpExchange = tcpExchange;
     }
 
     // ── 访问方 A（02 §5.1①④⑤ / §5.2①③④）──────────────────────────
@@ -183,7 +207,7 @@ public sealed class Puncher : IPuncher, IDisposable
         try
         {
             return proto == "tcp"
-                ? await InitiateTcpAsync(targetDeviceId, triggerMappingId, punchCts.Token, ct)
+                ? await InitiateTcpAsync(targetDeviceId, triggerMappingId, ct) // 编排器自管双流程窗口（§5.2⑥）
                 : await InitiateUdpAsync(targetDeviceId, triggerMappingId, punchCts.Token, ct);
         }
         catch (Exception e)
@@ -247,7 +271,8 @@ public sealed class Puncher : IPuncher, IDisposable
             }
             catch (Exception e)
             {
-                return await FailOrFallbackAsync(ack, targetDeviceId, e, ct, relayAllowed).ConfigureAwait(false);
+                return await FailOrFallbackAsync(ack.SessionId, ack.Peer.DeviceId, ack.Peer.StaticPubKey,
+                    targetDeviceId, e, ct, relayAllowed).ConfigureAwait(false);
             }
         }
         finally
@@ -257,10 +282,151 @@ public sealed class Puncher : IPuncher, IDisposable
         }
     }
 
-    /// <summary>TCP 打洞访问方（02 §5.2①③④）：端口 L 探测 → 0x70{tcp:L'} → Ack{对端 L', N} →
-    /// listen(L)+N 并发 connect（目标 portTcp+(N−1)）→ 全部候选连接扇出 THello1、首条 THello2
-    /// 到达的连接胜出（对端仅在收到 THello1 的连接上应答，天然消歧，02 §5.2④）。</summary>
+    /// <summary>TCP 打洞编排（02 §5.2⑥，2026-10-24）：晚探测新流程优先——0x78 起跑（双端并行探测、
+    /// 端点经 STUN-TCP 交换晚收集、基准映射被探针连接钉活、扇形 +0..+(N−1)）；服务端/对端不支持
+    /// （0x78 无应答=旧服务端静默丢弃，02 §7）→ 全窗降级旧 0x70 流程。两流程各自独立打洞窗。</summary>
     private async Task<PunchOutcome> InitiateTcpAsync(Guid targetDeviceId, Guid? triggerMappingId,
+        CancellationToken ct)
+    {
+        if (_sendPunchStart is not null && _tcpExchange is not null)
+        {
+            using var lateCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            lateCts.CancelAfter(_options.PunchTimeout);
+            var late = await TryInitiateTcpLateAsync(targetDeviceId, triggerMappingId, lateCts.Token, ct)
+                .ConfigureAwait(false);
+            if (late is not null) return late; // null=流程不可用（旧服务端）→ 降级
+        }
+        using var punchCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        punchCts.CancelAfter(_options.PunchTimeout);
+        return await InitiateTcpLegacyAsync(targetDeviceId, triggerMappingId, punchCts.Token, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>晚探测新流程 A 侧（02 §5.2⑥）：0x78 起跑（服务端同刻双推 Go）→ 本地端口 L 交换探测
+    ///（连接**保持打开**=映射钉活，应答携对端端点=开火锚点）→ 扇形齐射（无闸即打：双端应答同刻
+    /// 出发、开火差≈投递差）。返回 null=降级旧流程（仅 0x78 无应答/发送层瞬时失败——服务端未识别）。</summary>
+    private async Task<PunchOutcome?> TryInitiateTcpLateAsync(Guid targetDeviceId, Guid? triggerMappingId,
+        CancellationToken punchCt, CancellationToken ct)
+    {
+        var sendStart = _sendPunchStart!; // 编排器已判非空（InitiateTcpAsync 装配检查）
+        var exchange = _tcpExchange!;
+
+        // ① 0x78 起跑申请：2s 无应答=旧服务端（未知类型静默丢弃）→ null 降级
+        PunchStartGo go;
+        try
+        {
+            using var reqCts = CancellationTokenSource.CreateLinkedTokenSource(punchCt);
+            reqCts.CancelAfter(_options.PunchStartReplyTimeout);
+            go = await sendStart(targetDeviceId, triggerMappingId, "tcp", reqCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (ControlErrorException e) when (e.Code == ErrorCode.BadRequest && e.HttpLikeMsg.Contains("not_implemented"))
+        {
+            return null; // 已注册未挂载：服务端不识 0x78（防御路径——旧服务端实为静默丢弃走超时）
+        }
+        catch (ControlErrorException e)
+        {
+            return PunchOutcome.Failure(targetDeviceId, $"server_{e.Code}: {e.HttpLikeMsg}"); // 服务端已识别并拒绝（授权/离线）——旧流程同结果
+        }
+        catch (OperationCanceledException) when (!punchCt.IsCancellationRequested)
+        {
+            return null; // 2s 无应答：旧服务端静默丢弃（02 §7）→ 降级旧流程
+        }
+        catch (Exception)
+        {
+            return null; // 控制层瞬时故障：降级旧流程（其发送路径另试）
+        }
+
+        var relayAllowed = _relayFallback(targetDeviceId) && go.RelayAllowed;
+        var n = PunchPolicy.Normalize(go.PunchCount);
+
+        // ② 本地端口 L + STUN-TCP 交换探测（保持打开）：对端端点即开火锚点
+        var portL = 0;
+        Socket exchangeSocket;
+        StunTcpProber.PunchExchange x;
+        try
+        {
+            exchangeSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            TcpPunchFleet.SetPunchReuse(exchangeSocket);
+            exchangeSocket.Bind(new IPEndPoint(_options.BindAddress ?? IPAddress.Any, 0));
+            portL = ((IPEndPoint)exchangeSocket.LocalEndPoint!).Port;
+            x = await exchange(exchangeSocket, go.SessionId,
+                ToIpEndPoints(BuildLocalCandidates(portL)), punchCt).ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // 交换失败（对端旧版/丢失/连接不通）：不降级——0x78 会话已在服务端建立，旧流程会被
+            // 设备对去重吞掉；直接失败走中继回退（133102 类 CGNAT 的兜底路径不变）
+            exchangeSocket = null!;
+            var fail = new PunchOutcome(false, go.SessionId, targetDeviceId, null, null, null,
+                $"exchange_failed: {e.Message}", relayAllowed);
+            return await RelayOrReturnAsync(fail, go.Peer.StaticPubKey, ct).ConfigureAwait(false);
+        }
+
+        // ③ 扇形齐射（应答即锚点：无闸即打；波次补射保窗内重试）
+        try
+        {
+            var targets = TcpPunchPlan.TargetEndpoints(x.PeerEndpoint, n);
+            var directTargets = BuildDirectTargets(targets, ToProtocolEndpoints(x.PeerCandidates));
+            _log?.Invoke($"计划(A′) target={targetDeviceId.ToString()[..8]} mapped={x.Mapped} L={portL}"
+                        + $" N={n} peerMapped={x.PeerEndpoint} fan=[{string.Join(",", (IEnumerable<IPEndPoint>)targets)}]"
+                        + (directTargets.Count > 0 ? $" direct=[{string.Join(",", directTargets)}]" : ""));
+
+            using var initiator = PtpHandshake.StartInitiator(go.SessionId, _staticKey, go.Peer.StaticPubKey);
+            var fleet = TcpPunchFleet.Create(_options.BindAddress, portL, targets, directTargets, n,
+                PtpFrameType.THello2,
+                onConnection: t => t.SendAsync(initiator.THello1Wire, punchCt),
+                waveInterval: _options.TcpWaveInterval);
+            try
+            {
+                using var burstCts = CancellationTokenSource.CreateLinkedTokenSource(punchCt);
+                var burst = TcpBurstAsync(fleet, initiator.THello1Wire, burstCts.Token);
+                try
+                {
+                    var (winner, tHello2) = await fleet.WaitFrameAsync(punchCt).ConfigureAwait(false);
+                    var (tConfirm, keys) = initiator.HandleTHello2(tHello2);
+                    var transport = fleet.Release(winner);
+                    await transport.SendAsync(tConfirm, punchCt).ConfigureAwait(false);
+                    var session = TunnelSession.FromEstablishedKeys(go.SessionId, go.Peer.DeviceId, true,
+                        keys, transport, _handler, new TunnelSessionOptions
+                        {
+                            KeepaliveInterval = TimeSpan.FromSeconds(_options.KeepaliveSec),
+                            HandshakeTimeout = _options.PunchTimeout,
+                        }, staticKey: _staticKey, peerStaticPub: go.Peer.StaticPubKey);
+                    return PunchOutcome.Success(go.SessionId, go.Peer.DeviceId, session,
+                        winner.LocalEndPoint!, winner.RemoteEndPoint!);
+                }
+                finally
+                {
+                    burstCts.Cancel();
+                    try { await burst; } catch { /* 补发尽力而为 */ }
+                }
+            }
+            finally
+            {
+                _log?.Invoke($"池收尾(A′) live={fleet.LiveConnections} failedConnect={fleet.FailedConnects}"
+                            + $" waves={fleet.Waves} directRefused={fleet.DirectRefused}");
+                await fleet.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception e)
+        {
+            var fail = new PunchOutcome(false, go.SessionId, go.Peer.DeviceId, null, null, null,
+                e is OperationCanceledException && !ct.IsCancellationRequested
+                    ? "punch_timeout" : $"punch_error: {e.Message}", relayAllowed);
+            return await RelayOrReturnAsync(fail, go.Peer.StaticPubKey, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            exchangeSocket?.Close(); // 交换连接生命周期=本次打洞（收尾释放；映射钉活使命已完成）
+        }
+    }
+
+    /// <summary>TCP 打洞访问方·旧流程（02 §5.2①③④）：端口 L 探测 → 0x70{tcp:L'} → Ack{对端 L', N} →
+    /// listen(L)+N 并发 connect（扇形 +0..+(N−1)）→ 全部候选连接扇出 THello1、首条 THello2
+    /// 到达的连接胜出（对端仅在收到 THello1 的连接上应答，天然消歧，02 §5.2④）。
+    /// 新客户端亦为对端旧版的混布路径（0x78 不可用时兜底）。</summary>
+    private async Task<PunchOutcome> InitiateTcpLegacyAsync(Guid targetDeviceId, Guid? triggerMappingId,
         CancellationToken punchCt, CancellationToken ct)
     {
         // ① 专用本地端口 L → STUN-TCP 探测（M2-04：事务即关、句柄由探测方释放，仅保留端口号 L）
@@ -301,19 +467,19 @@ public sealed class Puncher : IPuncher, IDisposable
             var peerMapped = ParseEndpoint(ack.PeerEndpoints.Tcp)
                 ?? throw new IOException("PunchRequest Ack 未携带对端 TCP 端点");
             var n = PunchPolicy.Normalize(ack.PunchCount); // OQ-19：以服务端回填 N 为准
-            var target = TcpPunchPlan.TargetEndpoint(peerMapped, n);
-            var directTargets = BuildDirectTargets(peerMapped, ack.PeerLocalCandidates, n); // §5.4 直连优先
+            var targets = TcpPunchPlan.TargetEndpoints(peerMapped, n);
+            var directTargets = BuildDirectTargets(targets, ack.PeerLocalCandidates); // §5.4 直连优先（扇形已含偏移 0）
             // 计划线（P4 修复）：本端映射端点/端口 L/扇形 N/瞄准端点全量落日志——现场判
             // "瞄准是否命中对端实际分配"（H2 漂移）/ 对照对端计划线定位偏差侧
             _log?.Invoke($"计划(A) target={targetDeviceId.ToString()[..8]} mapped={mappedL} L={portL}"
-                        + $" N={n} peerMapped={peerMapped} aim={target}"
+                        + $" N={n} peerMapped={peerMapped} fan=[{string.Join(",", (IEnumerable<IPEndPoint>)targets)}]"
                         + (directTargets.Count > 0 ? $" direct=[{string.Join(",", directTargets)}]" : ""));
 
             // ③④ listen(L) + N 并发 connect（波次补射）→ 候选连接扇出 THello1 → 首条 THello2 的连接胜出；
             //    齐射闸（§5.2⑤ 方案 A）：A 以 Ack 到达为锚倒数 Δ——与 B 的 0x77 锚点同刻（服务端背靠背
             //    下发），双端到点齐射 SYN 空中交叉；directTargets 各起拒连重试直连探测（§5.4，后发不扰预测基准）
             using var initiator = PtpHandshake.StartInitiator(ack.SessionId, _staticKey, ack.Peer.StaticPubKey);
-            var fleet = TcpPunchFleet.Create(_options.BindAddress, portL, target, directTargets, n,
+            var fleet = TcpPunchFleet.Create(_options.BindAddress, portL, targets, directTargets, n,
                 PtpFrameType.THello2,
                 onConnection: t => t.SendAsync(initiator.THello1Wire, punchCt), // 建立即发首帧
                 volleyGate: ct => Task.Delay(PunchPolicy.TcpVolleyCountdown, ct),
@@ -355,7 +521,8 @@ public sealed class Puncher : IPuncher, IDisposable
         }
         catch (Exception e)
         {
-            return await FailOrFallbackAsync(ack, targetDeviceId, e, ct, relayAllowed).ConfigureAwait(false);
+            return await FailOrFallbackAsync(ack.SessionId, ack.Peer.DeviceId, ack.Peer.StaticPubKey,
+                targetDeviceId, e, ct, relayAllowed).ConfigureAwait(false);
         }
     }
 
@@ -369,27 +536,31 @@ public sealed class Puncher : IPuncher, IDisposable
                 : $"punch_error: {e.Message}",
             relayAllowed);
 
-    /// <summary>Ack 后失败统一出口：回退资格真且 0x74 分配缝已装 → 中继回退（M2-18）；否则纯失败。
-    /// M2-37 回退复用：设备对已有活中继会话（回切周期重打失败场景）→ 直接复用该会话返回成功结果，
-    /// 不再 0x74 新分配——新会话整体替换旧会话走 NET-75 排水窗会杀死传输中 channel，60s 回切周期下
-    /// 跨周期传输必断；对端被动跟随 0x74（02 §6.1②），本侧不分配则对端同样不重建。
-    /// 复用会话此后真亡（keepalive 判死摘表，TunnelHost.OnSessionDisconnected）→ 查找落空自然回到
-    /// 全新分配路径。</summary>
-    private async Task<PunchOutcome> FailOrFallbackAsync(PunchRequestAck ack, Guid targetDeviceId,
-        Exception e, CancellationToken ct, bool relayAllowed)
+    /// <summary>失败统一出口（参数化对端三元组——0x70 Ack 与 0x78 Go 两流程共用）。</summary>
+    private async Task<PunchOutcome> FailOrFallbackAsync(Guid sessionId, Guid peerDeviceId,
+        byte[] peerStaticPubKey, Guid targetDeviceId, Exception e, CancellationToken ct, bool relayAllowed)
+        => await RelayOrReturnAsync(FailAfterAck(sessionId, targetDeviceId, e, ct, relayAllowed),
+            peerStaticPubKey, ct).ConfigureAwait(false);
+
+    /// <summary>回退裁决：资格假/未装 0x74 缝=纯失败；M2-37 回退复用：设备对已有活中继会话
+    ///（回切周期重打失败场景）→ 直接复用该会话返回成功结果，不再 0x74 新分配——新会话整体替换
+    /// 旧会话走 NET-75 排水窗会杀死传输中 channel，60s 回切周期下跨周期传输必断；对端被动跟随
+    /// 0x74（02 §6.1②），本侧不分配则对端同样不重建。复用会话此后真亡（keepalive 判死摘表，
+    /// TunnelHost.OnSessionDisconnected）→ 查找落空自然回到全新分配路径。</summary>
+    private async Task<PunchOutcome> RelayOrReturnAsync(PunchOutcome fail, byte[] peerStaticPubKey,
+        CancellationToken ct)
     {
-        var fail = FailAfterAck(ack.SessionId, targetDeviceId, e, ct, relayAllowed);
-        if (!relayAllowed || _relayAllocator is null) return fail;
-        if (_liveRelaySession?.Invoke(targetDeviceId) is { IsClosed: false } existing)
-            return new PunchOutcome(true, ack.SessionId, ack.Peer.DeviceId, existing, null, null, null);
-        return await FallbackToRelayAsync(ack, fail, ct).ConfigureAwait(false);
+        if (!fail.RelayAllowed || _relayAllocator is null) return fail;
+        if (_liveRelaySession?.Invoke(fail.PeerDeviceId) is { IsClosed: false } existing)
+            return new PunchOutcome(true, fail.SessionId, fail.PeerDeviceId, existing, null, null, null);
+        return await FallbackToRelayAsync(fail, peerStaticPubKey, ct).ConfigureAwait(false);
     }
 
     /// <summary>中继回退（02 §4.5 承载绑定/§6.1①，M2-18）：0x74 分配（打洞会话须在服务端台账 120s 内，
-    /// 仅 Ack 后失败有会话可解析）→ JOIN（先 UDP 后 TCP 承载兜底）→ PTP 握手即经中继承载——
-    /// 同一 <see cref="TunnelSession"/> 帧改发 relay 地址，解帧逻辑不变（05 §4 加密与路径解耦）。
+    /// 仅 Ack 后失败有会话可解析）→ JOIN（TCP 优先、DROP 型封锁 OCE 转 UDP 兜底）→ PTP 握手即经
+    /// 中继承载——同一 <see cref="TunnelSession"/> 帧改发 relay 地址，解帧逻辑不变（05 §4 加密与路径解耦）。
     /// 回退失败并入打洞失败原因（映射态 failed）。</summary>
-    private async Task<PunchOutcome> FallbackToRelayAsync(PunchRequestAck ack, PunchOutcome fail,
+    private async Task<PunchOutcome> FallbackToRelayAsync(PunchOutcome fail, byte[] peerStaticPubKey,
         CancellationToken ct)
     {
         RelayTransport? transport = null;
@@ -397,12 +568,12 @@ public sealed class Puncher : IPuncher, IDisposable
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(_options.RelayFallbackTimeout); // 打洞 cts 已耗尽，回退独立计量
-            var grant = await _relayAllocator!(ack.SessionId, cts.Token).ConfigureAwait(false);
+            var grant = await _relayAllocator!(fail.SessionId, cts.Token).ConfigureAwait(false);
             transport = await RelayClient.JoinWithCarrierFallbackAsync(grant, ct: cts.Token).ConfigureAwait(false);
             // THello1 周期重发覆盖对端 JOIN 就绪窗口（relay 无缓冲：对端未 JOIN 期间包丢弃，M2-07）
             var resend = Math.Max(2, (int)(_options.RelayFallbackTimeout / _options.RelayHandshakeResendInterval));
-            var session = await TunnelSession.ConnectAsync(ack.SessionId, ack.Peer.DeviceId,
-                _staticKey, ack.Peer.StaticPubKey, transport, _handler,
+            var session = await TunnelSession.ConnectAsync(fail.SessionId, fail.PeerDeviceId,
+                _staticKey, peerStaticPubKey, transport, _handler,
                 new TunnelSessionOptions
                 {
                     KeepaliveInterval = TimeSpan.FromSeconds(_options.KeepaliveSec),
@@ -410,7 +581,7 @@ public sealed class Puncher : IPuncher, IDisposable
                     HandshakeResendCount = resend,
                     HandshakeResendInterval = _options.RelayHandshakeResendInterval,
                 }).ConfigureAwait(false);
-            return new PunchOutcome(true, ack.SessionId, ack.Peer.DeviceId, session,
+            return new PunchOutcome(true, fail.SessionId, fail.PeerDeviceId, session,
                 null, transport.RemoteEndPoint, null);
         }
         catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested)
@@ -528,17 +699,17 @@ public sealed class Puncher : IPuncher, IDisposable
         var peerMapped = ParseEndpoint(invite.PeerEndpoints.Tcp)
             ?? throw new IOException("PunchInvite 未携带发起方 TCP 端点");
         var n = PunchPolicy.Normalize(invite.PunchCount); // OQ-19：与发起方同一 N（服务端统一下发）
-        var target = TcpPunchPlan.TargetEndpoint(peerMapped, n);
-        var directTargets = BuildDirectTargets(peerMapped, invite.LocalCandidates, n); // §5.4 直连优先
+        var targets = TcpPunchPlan.TargetEndpoints(peerMapped, n);
+        var directTargets = BuildDirectTargets(targets, invite.LocalCandidates); // §5.4（扇形已含偏移 0）
         _log?.Invoke($"计划(B) target={invite.Peer.DeviceId.ToString()[..8]} mapped={mappedL} L={portL}"
-                    + $" N={n} peerMapped={peerMapped} aim={target}"
+                    + $" N={n} peerMapped={peerMapped} fan=[{string.Join(",", (IEnumerable<IPEndPoint>)targets)}]"
                     + (directTargets.Count > 0 ? $" direct=[{string.Join(",", directTargets)}]" : ""));
 
         // 建池先于 0x76（listen 口尽早开门迎 A 的直连探测/accept）；齐射经锚点闸（§5.2⑤ 方案 A）：
         // 等 0x77 PunchFire（服务端与 A 的 Ack 同刻下发）→ 双端各倒数同一 Δ 到点齐射（SYN 空中交叉，
         // 规避旧版「建池即打早于 A 映射建立、SYN 打空门」竞态）；锚点超时/缝未装配 → 立即开火兜底
         //（旧行为，残余时差由波次补射覆盖）
-        var fleet = TcpPunchFleet.Create(_options.BindAddress, portL, target, directTargets, n, PtpFrameType.THello1,
+        var fleet = TcpPunchFleet.Create(_options.BindAddress, portL, targets, directTargets, n, PtpFrameType.THello1,
             volleyGate: async ct =>
             {
                 if (_punchFireWaiter is null) return; // 单测缺省：建池即打
@@ -573,6 +744,70 @@ public sealed class Puncher : IPuncher, IDisposable
             _log?.Invoke($"池收尾(B) live={fleet.LiveConnections} failedConnect={fleet.FailedConnects}"
                         + $" waves={fleet.Waves} directRefused={fleet.DirectRefused}");
             await fleet.DisposeAsync(); // 幂等：成功路径已 Release 胜出，仅关其余候选与 listener
+        }
+    }
+
+    /// <summary>晚探测新流程 B 侧（02 §5.2⑥，2026-10-24）：0x78 PunchStartGo 推送 → 本地端口 L 交换探测
+    ///（连接保持打开=映射钉活；对端端点应答即开火锚点）→ 扇形齐射（无闸即打）→ 等任一连接 THello1 → 应答握手。</summary>
+    public async Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(go);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        if (_tcpExchange is null)
+            return PunchOutcome.Failure(go.Peer.DeviceId, "exchange_seam_missing: 交换探测缝未接线");
+        using var punchCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        punchCts.CancelAfter(_options.PunchTimeout);
+        Socket? exchangeSocket = null;
+        try
+        {
+            // ① 本地端口 L + STUN-TCP 交换探测（保持打开）：对端端点=开火锚点
+            exchangeSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            TcpPunchFleet.SetPunchReuse(exchangeSocket);
+            exchangeSocket.Bind(new IPEndPoint(_options.BindAddress ?? IPAddress.Any, 0));
+            var portL = ((IPEndPoint)exchangeSocket.LocalEndPoint!).Port;
+            var x = await _tcpExchange(exchangeSocket, go.SessionId,
+                ToIpEndPoints(BuildLocalCandidates(portL)), punchCts.Token).ConfigureAwait(false);
+
+            // ② 扇形齐射（应答即锚点：无闸即打；B 不扇出 THello1——等 A 的首帧天然消歧）
+            var n = PunchPolicy.Normalize(go.PunchCount);
+            var targets = TcpPunchPlan.TargetEndpoints(x.PeerEndpoint, n);
+            var directTargets = BuildDirectTargets(targets, ToProtocolEndpoints(x.PeerCandidates));
+            _log?.Invoke($"计划(B′) target={go.Peer.DeviceId.ToString()[..8]} mapped={x.Mapped} L={portL}"
+                        + $" N={n} peerMapped={x.PeerEndpoint} fan=[{string.Join(",", (IEnumerable<IPEndPoint>)targets)}]"
+                        + (directTargets.Count > 0 ? $" direct=[{string.Join(",", directTargets)}]" : ""));
+            var fleet = TcpPunchFleet.Create(_options.BindAddress, portL, targets, directTargets, n,
+                PtpFrameType.THello1, waveInterval: _options.TcpWaveInterval);
+            try
+            {
+                var (winner, tHello1) = await fleet.WaitFrameAsync(punchCts.Token).ConfigureAwait(false);
+                var transport = fleet.Release(winner);
+                var session = await TunnelSession.AcceptAsync(go.Peer.DeviceId, tHello1,
+                    _staticKey, go.Peer.StaticPubKey, transport, _handler,
+                    new TunnelSessionOptions
+                    {
+                        KeepaliveInterval = TimeSpan.FromSeconds(_options.KeepaliveSec),
+                        HandshakeTimeout = _options.PunchTimeout,
+                    });
+                return PunchOutcome.Success(go.SessionId, go.Peer.DeviceId, session,
+                    winner.LocalEndPoint!, winner.RemoteEndPoint!);
+            }
+            finally
+            {
+                _log?.Invoke($"池收尾(B′) live={fleet.LiveConnections} failedConnect={fleet.FailedConnects}"
+                            + $" waves={fleet.Waves} directRefused={fleet.DirectRefused}");
+                await fleet.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception e)
+        {
+            return PunchOutcome.Failure(go.Peer.DeviceId,
+                e is OperationCanceledException && !ct.IsCancellationRequested
+                    ? "punch_timeout"
+                    : $"punch_error: {e.Message}");
+        }
+        finally
+        {
+            exchangeSocket?.Close(); // 交换连接生命周期=本次打洞
         }
     }
 
@@ -630,23 +865,28 @@ public sealed class Puncher : IPuncher, IDisposable
             .Select(ip => ToProtocolEndpoint(new IPEndPoint(ip, port)))
             .ToArray();
 
-    /// <summary>TCP 直连目标集（§5.4）：对端映射端点原样（偏移 0）∪ 对端本机候选；
-    /// 去重、剔除与预测目标相同者（N=1 时偏移 0 与预测同点即免）。</summary>
-    private static List<IPEndPoint> BuildDirectTargets(IPEndPoint peerMapped,
-        P2P.Core.Protocol.Endpoint[]? peerCandidates, int concurrency)
+    /// <summary>TCP 直连目标集（§5.4⑥）：对端本机候选，剔除与扇形目标重叠者
+    ///（映射端点原样=扇形偏移 0 已内置扇形——候选仅为同网段/公网直达加成）。</summary>
+    private static List<IPEndPoint> BuildDirectTargets(IReadOnlyList<IPEndPoint> fanTargets,
+        P2P.Core.Protocol.Endpoint[]? peerCandidates)
     {
-        // 对端无候选（旧端 null / 枚举降级空表）→ 整体跳过直连探测，退化为纯映射路径
-        // （02 §5.4 混布口径；NatSimulator 探测映射允许注册来源入站——TD-21——无条件瞄
-        // 偏移 0 会击穿「跨 NAT 不可直达」的必败场景前提）
+        // 对端无候选（旧端 null / 枚举降级空表）→ 整体跳过直连探测，退化为纯扇形路径
+        //（02 §5.4 混布口径；映射端点原样=扇形偏移 0 已内置，候选仅为同网段/公网直达加成）
         if (peerCandidates is null || peerCandidates.Length == 0) return [];
-        var punchTarget = TcpPunchPlan.TargetEndpoint(peerMapped, concurrency);
         var list = new List<IPEndPoint>();
-        if (!peerMapped.Equals(punchTarget)) list.Add(peerMapped);
         foreach (var ep in peerCandidates)
-            if (ParseEndpoint(ep) is { } parsed && !parsed.Equals(punchTarget) && !list.Contains(parsed))
+            if (ParseEndpoint(ep) is { } parsed && !fanTargets.Contains(parsed) && !list.Contains(parsed))
                 list.Add(parsed);
         return list;
     }
+
+    /// <summary>协议端点 → IPEndPoint 集（交换探测候选入参用；不可解析项丢弃）。</summary>
+    private static IPEndPoint[] ToIpEndPoints(P2P.Core.Protocol.Endpoint[]? endpoints)
+        => endpoints is null ? [] : endpoints.Select(ParseEndpoint).Where(ep => ep is not null).Select(ep => ep!).ToArray();
+
+    /// <summary>IPEndPoint 集 → 协议端点（交换应答候选出参用）。</summary>
+    private static P2P.Core.Protocol.Endpoint[]? ToProtocolEndpoints(IPEndPoint[] endpoints)
+        => endpoints.Length == 0 ? null : endpoints.Select(ToProtocolEndpoint).ToArray();
 
     /// <summary>本机 IPv4 枚举（§5.4 缺省实现）：BindAddress 非空 → 仅该地址；否则复用
     /// SubnetSurvey（仅 IPv4、排除 loopback），滤 100.64.0.0/10 虚拟网段，去重限 8 个；异常降级空表。</summary>

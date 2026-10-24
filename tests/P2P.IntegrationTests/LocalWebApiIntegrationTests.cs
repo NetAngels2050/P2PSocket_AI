@@ -150,6 +150,9 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
 
         public Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default)
             => (_inner ?? Default).RespondAsync(invite, ct);
+
+        public Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+            => Task.FromResult(PunchOutcome.Failure(go.Peer.DeviceId, "go_not_supported"));
     }
 
     /// <summary>打洞桩：出队即闸死 → 稳定停留 punching；停机取消放行（真 Puncher 同样尊重 ct）。</summary>
@@ -167,6 +170,9 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
 
         public Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default)
             => throw new NotSupportedException();
+
+        public Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+            => Task.FromResult(PunchOutcome.Failure(go.Peer.DeviceId, "go_not_supported"));
     }
 
     /// <summary>打洞桩：出队即失败（failed 轨迹与手动重试用例）。</summary>
@@ -178,6 +184,9 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
 
         public Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default)
             => throw new NotSupportedException();
+
+        public Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+            => Task.FromResult(PunchOutcome.Failure(go.Peer.DeviceId, "go_not_supported"));
     }
 
     /// <summary>替身打洞器：内存传输对 + 双端真实 PTP 握手（流量计数路径与产品一致）。</summary>
@@ -223,6 +232,9 @@ public sealed class LocalWebApiIntegrationTests : IAsyncLifetime
 
         public Task<PunchOutcome> RespondAsync(PunchInvite invite, CancellationToken ct = default)
             => throw new NotSupportedException();
+
+        public Task<PunchOutcome> RespondGoAsync(PunchStartGo go, CancellationToken ct = default)
+            => Task.FromResult(PunchOutcome.Failure(go.Peer.DeviceId, "go_not_supported"));
     }
 
     private sealed class ClientStack : IAsyncDisposable
