@@ -4,6 +4,7 @@
     <RootNamespace>P2P.Core</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="MessagePack" Version="3.1.8" />
+    <!-- 3.1.9：GHSA-qhrr-8q5h-9q3h（object[] 分配放大 DoS，修复 3.1.9；本项目全具型 Deserialize<T> 不走 object 路径，升级为审计红线+纵深防御） -->
+    <PackageReference Include="MessagePack" Version="3.1.9" />
   </ItemGroup>
 </Project>
