@@ -82,7 +82,10 @@ public sealed class UdpMappingTests
 
     /// <summary>发数据报到映射端口并等回显：首包存在 OPEN 异步处理竞态（UDP_DGRAM 先于
     /// OPEN_OK 到达目标侧被丢，UDP 语义容忍），超时未回则重发模拟应用重传；
-    /// 收尾排空滞留的重复回包，避免污染后续 Receive。</summary>
+    /// 收尾排空滞留的重复回包，避免污染后续 Receive。
+    /// 按内容过滤外来帧：打洞族用例（PuncherTests 主端点必丢路径）向死端口持续重发 THello1，
+    /// 同进程并行测试绑到其邻近临时端口时帧会串入——UDP 应用层按杂散报文丢弃继续等真回显
+    /// （满载偶发实证：app 首收 01 11 00 00 00=THello1 断言 Collections differ）。</summary>
     private static async Task<byte[]> SendAndWaitEchoAsync(UdpClient app, byte[] payload, ushort port,
         int attempts = 5, int waitMs = 600)
     {
@@ -93,10 +96,15 @@ public sealed class UdpMappingTests
             using var cts = new CancellationTokenSource(waitMs);
             try
             {
-                var r = await app.ReceiveAsync(cts.Token);
-                var any = new IPEndPoint(IPAddress.Any, 0);
-                while (app.Available > 0) _ = app.Receive(ref any); // 排空重试滞留
-                return r.Buffer;
+                while (true)
+                {
+                    var r = await app.ReceiveAsync(cts.Token);
+                    if (!r.Buffer.AsSpan().SequenceEqual(payload))
+                        continue; // 外来帧：丢弃，预算内继续等真回显
+                    var any = new IPEndPoint(IPAddress.Any, 0);
+                    while (app.Available > 0) _ = app.Receive(ref any); // 排空重试滞留
+                    return r.Buffer;
+                }
             }
             catch (OperationCanceledException) when (i < attempts - 1) { /* 竞态丢包：重发 */ }
         }
@@ -262,8 +270,19 @@ public sealed class UdpMappingTests
             await c3.SendAsync(payload, target);
             await Task.Delay(100);
         }
+        // 静默=窗口内无「回显内容」：外来帧（打洞族 THello1 临时端口串扰）排空不计
         using var timeout = new CancellationTokenSource(800);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => c3.ReceiveAsync(timeout.Token).AsTask());
+        var echoed = false;
+        try
+        {
+            while (!echoed)
+            {
+                var r = await c3.ReceiveAsync(timeout.Token);
+                echoed = r.Buffer.AsSpan().SequenceEqual(payload);
+            }
+        }
+        catch (OperationCanceledException) { }
+        Assert.False(echoed, "超限端点不应收到回显");
 
         // 目标侧只见过 2 个 channel 源端口；映射态不受影响（丢弃非失败）
         Assert.Equal(2, echo.Sources.Select(s => s.Port).Distinct().Count());
@@ -290,10 +309,21 @@ public sealed class UdpMappingTests
         var detail = topo.EngineA.Snapshots.Single(s => s.Config.MappingId == mappingId).Detail;
         Assert.Contains("l3_not_permitted", detail);
 
-        // OPEN_FAIL 后该端点后续包静默丢弃（表项保留不重试 OPEN，监听保持）
+        // OPEN_FAIL 后该端点后续包静默丢弃（表项保留不重试 OPEN，监听保持）；
+        // 静默=窗口内无「回显内容」（外来帧排空不计——同 SendAndWaitEchoAsync 串扰口径）
         await app.SendAsync(payload, new IPEndPoint(IPAddress.Loopback, port));
         using var timeout = new CancellationTokenSource(800);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => app.ReceiveAsync(timeout.Token).AsTask());
+        var echoed = false;
+        try
+        {
+            while (!echoed)
+            {
+                var r = await app.ReceiveAsync(timeout.Token);
+                echoed = r.Buffer.AsSpan().SequenceEqual(payload);
+            }
+        }
+        catch (OperationCanceledException) { }
+        Assert.False(echoed, "OPEN_FAIL 端点不应收到转发/回显");
         Assert.Equal(MappingState.Failed, StateOf(topo, mappingId));
     }
 

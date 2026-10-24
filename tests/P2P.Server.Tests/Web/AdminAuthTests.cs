@@ -30,7 +30,7 @@ public sealed class AdminAuthTests : IAsyncLifetime
             DbInitializer.Initialize(init); // 种 admin/admin（OQ-3）
         var options = new ServerOptions
         {
-            Listen = { Web = Random.Shared.Next(21000, 24000) }, // 测试带（与客户端测试带不相交）
+            Listen = { Web = 0 }, // 0=OS 分配：启动后 _web.BoundPort 回读（并行夹具零撞口）
         };
         var registry = new DeviceRegistry(); // 本任务无在线设备（纯账号链）
         _web = new ServerWebHostService(options, _time, new AdminSessionStore(_time), factory,
@@ -41,7 +41,7 @@ public sealed class AdminAuthTests : IAsyncLifetime
             WebRootOverride = Path.Combine(Path.GetTempPath(), $"p2p-no-webroot-{Guid.NewGuid():N}"),
         };
         await _web.StartAsync(CancellationToken.None);
-        _port = options.Listen.Web;
+        _port = _web.BoundPort;
     }
 
     public async Task DisposeAsync()

@@ -82,12 +82,15 @@ public sealed class StunServiceTests : IAsyncLifetime
         }
     }
 
-    private async Task<UdpReceiveResult?> RoundTripAsync(UdpClient client, byte[] wire)
+    /// <summary>UDP 单事务往返（null=无响应：干净关闭/重置/超时统一）。timeoutMs：满载下服务端
+    /// 接收循环可被调度延迟数百 ms~数秒（全解决方案并行实况）——正路径应答等待须放宽，缺省 500
+    /// 仅够负路径「无响应」证明窗。</summary>
+    private async Task<UdpReceiveResult?> RoundTripAsync(UdpClient client, byte[] wire, int timeoutMs = 500)
     {
         if (client.Client.RemoteEndPoint is null)
             client.Connect(new IPEndPoint(IPAddress.Loopback, _port)); // 使 LocalEndPoint 解析出源地址
         await client.SendAsync(wire);
-        return await ReceiveOrNullAsync(client);
+        return await ReceiveOrNullAsync(client, timeoutMs);
     }
 
     private byte[] Build(byte[] secret, ulong? tsOverride = null, byte[]? nonceOverride = null, Guid? deviceOverride = null)
@@ -101,7 +104,7 @@ public sealed class StunServiceTests : IAsyncLifetime
     public async Task AuthenticatedBinding_ReturnsXorMappedAddress()
     {
         using var client = new UdpClient(AddressFamily.InterNetwork);
-        var result = await RoundTripAsync(client, Build(_secret));
+        var result = await RoundTripAsync(client, Build(_secret), 3000);
 
         Assert.NotNull(result);
         Assert.True(StunCodec.TryParseBindingResponse(result!.Value.Buffer, out var response));
@@ -145,13 +148,13 @@ public sealed class StunServiceTests : IAsyncLifetime
         var nonce = RandomGenerator.Bytes(16);
 
         // 首次：正常回应
-        Assert.NotNull(await RoundTripAsync(client, Build(_secret, nonceOverride: nonce)));
+        Assert.NotNull(await RoundTripAsync(client, Build(_secret, nonceOverride: nonce), 3000));
         // 同 nonce 重放（新事务）：静默
         Assert.Null(await RoundTripAsync(client, Build(_secret, nonceOverride: nonce)));
 
         // 5min 去重窗过期（含清扫周期）后：同 nonce 可再用
         _time.Advance(TimeSpan.FromMinutes(6));
-        Assert.NotNull(await RoundTripAsync(client, Build(_secret, nonceOverride: nonce)));
+        Assert.NotNull(await RoundTripAsync(client, Build(_secret, nonceOverride: nonce), 3000));
     }
 
     [Fact]
@@ -160,7 +163,7 @@ public sealed class StunServiceTests : IAsyncLifetime
         await RecreateAsync(requireAuth: false); // 换 stun_auth=0 实例
 
         using var client = new UdpClient(AddressFamily.InterNetwork);
-        var result = await RoundTripAsync(client, Build(_secret, deviceOverride: Guid.NewGuid()));
+        var result = await RoundTripAsync(client, Build(_secret, deviceOverride: Guid.NewGuid()), 3000);
         Assert.NotNull(result);
     }
 
@@ -194,7 +197,7 @@ public sealed class StunServiceTests : IAsyncLifetime
         var (response, _) = await TcpExchangeAsync(_tcpPort, Build(_secret, deviceOverride: Guid.NewGuid()));
 
         Assert.Null(response); // 闸②：未注册直接断连，无回应（无回显放大）
-        Assert.True(_service.Guard.Snapshot().Auth > before);
+        Assert.True((await WaitGuardAsync(s => s.Auth > before)).Auth > before); // 认证计数异步收敛
     }
 
     [Fact]
@@ -232,7 +235,7 @@ public sealed class StunServiceTests : IAsyncLifetime
 
             var (response, _) = await TcpExchangeAsync(_tcpPort, Build(_secret));
             Assert.Null(response); // 闸① TCP：第 5 条即连即关
-            Assert.Equal(1, _service.Guard.Snapshot().Rate);
+            Assert.Equal(1, (await WaitGuardAsync(s => s.Rate >= 1)).Rate);
         }
         finally
         {
@@ -248,14 +251,16 @@ public sealed class StunServiceTests : IAsyncLifetime
         await RecreateAsync(requireAuth: true, new StunGuardOptions { PerDeviceQps = 1000 }); // 抬闸③孤测闸①
 
         using var client = new UdpClient(AddressFamily.InterNetwork);
+        client.Client.ReceiveBufferSize = 1 << 20; // 105 连发排空快于服务端消费：缓冲放大防回环排包
         client.Connect(new IPEndPoint(IPAddress.Loopback, _port));
         for (var i = 0; i < 105; i++)
             await client.SendAsync(Build(_secret)); // FakeTime 冻结 → 无补币，突发容量 100 耗尽
-        Assert.Equal(100, await DrainResponsesAsync(client));
-        Assert.Equal(5, _service.Guard.Snapshot().Rate);
+        // 长读窗：满载下服务端接收循环可滞后数秒，200ms 短窗会提前收尾误判缺包
+        Assert.Equal(100, await DrainResponsesAsync(client, 5000));
+        Assert.Equal(5, (await WaitGuardAsync(s => s.Rate >= 5)).Rate); // 丢弃计数异步收敛后精确断言
 
         _time.Advance(TimeSpan.FromSeconds(1)); // 补币 50 枚 → 恢复放行
-        Assert.NotNull(await RoundTripAsync(client, Build(_secret)));
+        Assert.NotNull(await RoundTripAsync(client, Build(_secret), 5000));
     }
 
     [Fact]
@@ -267,11 +272,11 @@ public sealed class StunServiceTests : IAsyncLifetime
         client.Connect(new IPEndPoint(IPAddress.Loopback, _port));
         for (var i = 0; i < 12; i++)
             await client.SendAsync(Build(_secret));
-        Assert.Equal(10, await DrainResponsesAsync(client)); // QPS=10 放行前十
-        Assert.Equal(2, _service.Guard.Snapshot().Rate);
+        Assert.Equal(10, await DrainResponsesAsync(client, 3000)); // QPS=10 放行前十（长读窗抗滞后）
+        Assert.Equal(2, (await WaitGuardAsync(s => s.Rate >= 2)).Rate);
 
         _time.Advance(TimeSpan.FromSeconds(1));
-        Assert.NotNull(await RoundTripAsync(client, Build(_secret)));
+        Assert.NotNull(await RoundTripAsync(client, Build(_secret), 3000));
     }
 
     [Fact]
@@ -284,14 +289,14 @@ public sealed class StunServiceTests : IAsyncLifetime
         client.Connect(new IPEndPoint(IPAddress.Loopback, _port));
         for (var i = 0; i < 5; i++)
             await client.SendAsync(Build(_secret));
-        Assert.Equal(5, await DrainResponsesAsync(client)); // 窗内 ≤ 阈值全放行
+        Assert.Equal(5, await DrainResponsesAsync(client, 3000)); // 窗内 ≤ 阈值全放行（长读窗抗滞后）
 
         Assert.Null(await RoundTripAsync(client, Build(_secret))); // 第 6 条：超阈触发熔断即拒
         Assert.Null(await RoundTripAsync(client, Build(_secret))); // 熔断期内：一律拒
-        Assert.Equal(2, _service.Guard.Snapshot().Circuit);
+        Assert.Equal(2, (await WaitGuardAsync(s => s.Circuit >= 2)).Circuit); // 计数异步收敛后精确断言
 
         _time.Advance(TimeSpan.FromSeconds(6)); // 熔断 5s 过期 → 恢复
-        Assert.NotNull(await RoundTripAsync(client, Build(_secret)));
+        Assert.NotNull(await RoundTripAsync(client, Build(_secret), 3000));
     }
 
     // ── 辅助 ─────────────────────────────────────────────────────────
@@ -327,11 +332,27 @@ public sealed class StunServiceTests : IAsyncLifetime
         }
     }
 
-    /// <summary>排空已收响应（每次等 200ms，超时即止）。</summary>
-    private static async Task<int> DrainResponsesAsync(UdpClient client)
+    /// <summary>排空已收响应（每次等 perReadTimeoutMs，超时即止）。</summary>
+    private static async Task<int> DrainResponsesAsync(UdpClient client, int perReadTimeoutMs = 200)
     {
         var count = 0;
-        while (await ReceiveOrNullAsync(client, 200) is not null) count++;
+        while (await ReceiveOrNullAsync(client, perReadTimeoutMs) is not null) count++;
         return count;
+    }
+
+    /// <summary>守卫丢弃/放行计数轮询收敛（UDP/TCP 到达计数异步于测试推进——满载下服务端
+    /// 接收循环可被调度延迟数秒；以「预期达标或超时」收敛代替裸读，超时返回现值仍由调用方
+    /// 精确断言兜真实丢包）。</summary>
+    private async Task<StunDropStats> WaitGuardAsync(Func<StunDropStats, bool> done, int timeoutMs = 5000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        var snap = _service.Guard.Snapshot();
+        while (!done(snap))
+        {
+            if (Environment.TickCount64 > deadline) return snap;
+            await Task.Delay(50);
+            snap = _service.Guard.Snapshot();
+        }
+        return snap;
     }
 }

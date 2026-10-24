@@ -627,17 +627,17 @@ public sealed class ScenarioIntegrationTests : IAsyncLifetime
         var audit = new AuditLogger(_factory);
         var groups = new GroupService(_factory, _registry, audit, new DeviceListPusher(_factory, _registry));
         var admin = new AdminService(_factory, _registry, audit);
-        var options = new ServerOptions { Listen = { Web = Random.Shared.Next(21000, 24000) } };
+        var options = new ServerOptions { Listen = { Web = 0 } }; // 0=OS 分配：启动后 _web.BoundPort 回读（与其他测试程序集并行零撞口）
         _web = new ServerWebHostService(options, TimeProvider.System, new AdminSessionStore(TimeProvider.System),
             _factory, audit, admin, _registry, groups, _relays[^1])
         {
             WebRootOverride = Path.Combine(Path.GetTempPath(), $"p2p-no-webroot-{Guid.NewGuid():N}"),
         };
         await _web.StartAsync(CancellationToken.None);
-        _webPort = options.Listen.Web;
+        _webPort = _web.BoundPort;
         _webHttp = new HttpClient(new HttpClientHandler { CookieContainer = new CookieContainer() })
         {
-            BaseAddress = new Uri($"http://127.0.0.1:{options.Listen.Web}/"),
+            BaseAddress = new Uri($"http://127.0.0.1:{_web.BoundPort}/"),
         };
         var login = await PostAsync(_webHttp, "/api/auth/login", new { username = "admin", password = "admin" });
         Assert.Equal(0, login.GetProperty("code").GetInt32());

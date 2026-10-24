@@ -28,7 +28,12 @@ internal sealed class TestDatabase : IDisposable
 
     public void Dispose()
     {
-        try { SqliteConnection.ClearAllPools(); } catch { /* 并行夹具占用中：留待系统临时目录清理 */ }
+        // ClearPool（仅本夹具连接串）而非 ClearAllPools：后者进程级全局，与并行夹具
+        // TestDatabase..ctor 的「Open 入池 → ExecuteScalar 复用」竞态——刚入池的 SafeHandle
+        // 被他夹具清池析构，ObjectDisposedException 偶发炸掉他类夹具（1ms 瞬败家族实证：
+        // Relay_UnknownSourceDatagram / AdminDevicesApiTests.解绑 TRX 堆栈）。连接串唯一，
+        // 池内空闲连接随临时文件删除自然失效，无需全局清扫。
+        try { SqliteConnection.ClearPool(new SqliteConnection(DataSource)); } catch { /* 容错 */ }
         foreach (var suffix in new[] { "", "-wal", "-shm" })
             try { File.Delete(_path + suffix); } catch { /* 句柄占用即放弃（临时目录兜底） */ }
     }

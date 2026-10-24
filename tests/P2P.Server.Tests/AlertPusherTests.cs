@@ -195,12 +195,12 @@ public sealed class AlertPusherTests : IDisposable
     [Fact]
     public async Task 真实HTTP_回环webhook收到告警载荷()
     {
-        // 临时 Kestrel webhook 接收端（线级：真实 HttpClient→TCP→JSON 反序列化全链）
-        var port = Random.Shared.Next(21000, 24000);
+        // 临时 Kestrel webhook 接收端（线级：真实 HttpClient→TCP→JSON 反序列化全链）；
+        // 0=OS 分配端口，启动后自 app.Urls 回读（并行夹具零撞口）
         var received = new List<(string? ContentType, JsonElement Body)>();
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
-        builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
         var app = builder.Build();
         app.MapPost("/hook", async (HttpContext ctx) =>
         {
@@ -208,6 +208,8 @@ public sealed class AlertPusherTests : IDisposable
                 await ctx.Request.ReadFromJsonAsync<JsonElement>()));
         });
         await app.StartAsync();
+        var port = app.Urls.Select(u => Uri.TryCreate(u, UriKind.Absolute, out var x) ? x.Port : -1)
+            .FirstOrDefault(p => p > 0);
         try
         {
             SetConfig("alert_webhook_url", $"http://127.0.0.1:{port}/hook");

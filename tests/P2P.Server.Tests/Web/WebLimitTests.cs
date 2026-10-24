@@ -39,9 +39,9 @@ public sealed class WebLimitTests : IAsyncLifetime
         var groups = new GroupService(_factory, registry, audit: audit, pusher, invalidation);
         var admin = new AdminService(_factory, registry, audit, invalidation, listPusher: pusher);
 
-        // 端口带 28000-33000：与其他 Web 宿主夹具带（21000-27000）不相交——
-        // 全解决方案并行下随机端口偶发同口绑定（AddressInUse 瞬断）从本类消除
-        var options = new ServerOptions { Listen = { Web = Random.Shared.Next(28000, 33000) } };
+        // Web=0：OS 分配端口启动后 _web.BoundPort 回读——并行夹具零撞口
+        // （原专有带 28000-33000 随全仓 Web 夹具改 0 号端口一并退役）
+        var options = new ServerOptions { Listen = { Web = 0 } };
         _web = new ServerWebHostService(options, _time,
             new AdminSessionStore(TimeProvider.System), _factory, audit, admin, registry, groups)
         {
@@ -49,7 +49,7 @@ public sealed class WebLimitTests : IAsyncLifetime
         };
         await _web.StartAsync(CancellationToken.None);
 
-        _http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{options.Listen.Web}/") };
+        _http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{_web.BoundPort}/") };
         _http.DefaultRequestHeaders.ConnectionClose = true; // 每请求独立连接——防 keep-alive 复用绕开额度观测
     }
 

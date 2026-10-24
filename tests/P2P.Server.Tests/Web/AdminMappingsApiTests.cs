@@ -52,7 +52,7 @@ public sealed class AdminMappingsApiTests : IAsyncLifetime
         _server = new ControlServer(factory, _registry, router.DispatchAsync);
         await _server.StartAsync(new IPEndPoint(IPAddress.Loopback, 0));
 
-        var options = new ServerOptions { Listen = { Web = Random.Shared.Next(21000, 24000) } };
+        var options = new ServerOptions { Listen = { Web = 0 } }; // 0=OS 分配：启动后 _web.BoundPort 回读（并行夹具零撞口）
         _web = new ServerWebHostService(options, TimeProvider.System, new AdminSessionStore(TimeProvider.System),
             factory, audit, admin, _registry, groupService)
         {
@@ -62,7 +62,7 @@ public sealed class AdminMappingsApiTests : IAsyncLifetime
 
         _http = new HttpClient(new HttpClientHandler { CookieContainer = new CookieContainer() })
         {
-            BaseAddress = new Uri($"http://127.0.0.1:{options.Listen.Web}/"),
+            BaseAddress = new Uri($"http://127.0.0.1:{_web.BoundPort}/"),
         };
         Assert.Equal(HttpStatusCode.OK,
             (await _http.PostAsJsonAsync("/api/auth/login", new { username = "admin", password = "admin" })).StatusCode);

@@ -77,8 +77,11 @@ internal sealed class TestPcpClient : IAsyncDisposable
     }
 
     /// <summary>接收指定类型应答，途中交错的 0x41 列表推送帧跳过（M2-10：服务端异步提示帧与
-    /// 请求-应答流同连接交错，严格接收会误吞应答前的推送帧）。</summary>
-    public async Task<T?> ReceiveSkippingPushesAsync<T>(int timeoutMs = 5000) where T : class, IPcpMessage
+    /// 请求-应答流同连接交错，严格接收会误吞应答前的推送帧）。skipInvalidation：连 0x75 一并跳过——
+    /// 容忍 PresenceMonitor 兜底扫描与进程内即时路径的双推竞态（M2-13 设计固有：扫描落在
+    /// 「写库后/内存降级前」窗口即补推同载荷 0x75，客户端消费幂等——DisableUser 家族用）。</summary>
+    public async Task<T?> ReceiveSkippingPushesAsync<T>(int timeoutMs = 5000, bool skipInvalidation = false)
+        where T : class, IPcpMessage
     {
         var deadline = Environment.TickCount64 + timeoutMs;
         while (true)
@@ -87,8 +90,9 @@ internal sealed class TestPcpClient : IAsyncDisposable
             var body = await ReadFrameOrThrow<T>(remaining);
             if (body is null) return null;
             var msgpack = IncomingSigned ? PcpCodec.DecodeSigned(body, ConnMacKey) : body;
-            if (PcpCodec.Peek(msgpack).MsgType == MsgType.DeviceListUpdate)
-                continue;
+            var type = PcpCodec.Peek(msgpack).MsgType;
+            if (type == MsgType.DeviceListUpdate) continue;
+            if (skipInvalidation && type == MsgType.Invalidation) continue;
             return PcpCodec.Decode<T>(msgpack);
         }
     }

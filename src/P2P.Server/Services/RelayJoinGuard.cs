@@ -18,7 +18,11 @@ public sealed class RelayJoinGuard(TimeProvider? time = null)
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private readonly Lock _gate = new();
     private readonly Dictionary<IPAddress, Bucket> _buckets = [];
-    private long _dropped; // 限流丢弃累计（观测与测试断言——重启清零，内存态同告警基线口径）
+    private long _admitted; // 限流放行累计（观测与测试收敛点——StunGuard.Admitted 同款）
+    private long _dropped;  // 限流丢弃累计（观测与测试断言——重启清零，内存态同告警基线口径）
+
+    /// <summary>JOIN 过闸放行累计。</summary>
+    public long Admitted => Volatile.Read(ref _admitted);
 
     /// <summary>JOIN 被限流丢弃累计。</summary>
     public long Dropped => Volatile.Read(ref _dropped);
@@ -46,6 +50,7 @@ public sealed class RelayJoinGuard(TimeProvider? time = null)
             bucket.LastTicks = now;
             if (bucket.Tokens < 1) { _dropped++; return false; }
             bucket.Tokens -= 1;
+            _admitted++;
             return true;
         }
     }

@@ -43,10 +43,10 @@ public sealed class ServerWebHostTests : IAsyncLifetime
     private sealed record WebStack(ServerWebHostService Web, AdminSessionStore Sessions, int Port);
 
     /// <summary>起 Web 宿主；webRoot 缺省指向不存在的临时路径=纯 API 形态（静态跳过）。</summary>
-    private async Task<WebStack> StartWebAsync(string? webRoot = null, string bind = "127.0.0.1", int? port = null)
+    private async Task<WebStack> StartWebAsync(string? webRoot = null, string bind = "127.0.0.1")
     {
         var options = new ServerOptions();
-        options.Listen.Web = port ?? Random.Shared.Next(21000, 24000); // 测试带：与 Client.Tests 映射族 24000-28000 不相交
+        options.Listen.Web = 0; // 0=OS 分配：启动后 web.BoundPort 回读（并行夹具零撞口）
         options.Listen.WebBind = bind;
         var sessions = new AdminSessionStore(TimeProvider.System);
         var factory = new StubFactory(() => new AppDbContext(
@@ -59,7 +59,7 @@ public sealed class ServerWebHostTests : IAsyncLifetime
         };
         await web.StartAsync(CancellationToken.None);
         _web = web;
-        return new WebStack(web, sessions, options.Listen.Web);
+        return new WebStack(web, sessions, web.BoundPort);
     }
 
     [Fact]

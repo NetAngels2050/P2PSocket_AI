@@ -46,11 +46,24 @@ public sealed class ServerWebHostService(
     /// <summary>测试缝：静态根目录（缺省=程序目录/wwwroot）。</summary>
     public string? WebRootOverride { get; init; }
 
+    /// <summary>启动后实际绑定的 Web 端口（Listen.Web=0 时由 OS 分配，启动后从 Kestrel
+    /// 解析地址回读——测试夹具并发起宿主零撞口；非 0 配置与 Listen.Web 同值）。</summary>
+    public int BoundPort { get; private set; }
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         _app = Build(options, time, sessions, dbFactory, audit, admin, registry, groups, relay, stun,
             limiter, WebRootOverride, loginThrottle, alertPusher, blacklist, control, cipher);
         await _app.StartAsync(cancellationToken).ConfigureAwait(false);
+        BoundPort = ReadBoundPort(_app, options.Listen.Web);
+    }
+
+    private static int ReadBoundPort(WebApplication app, int configured)
+    {
+        foreach (var url in app.Urls)
+            if (Uri.TryCreate(url, UriKind.Absolute, out var u) && u.Port > 0)
+                return u.Port;
+        return configured;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)

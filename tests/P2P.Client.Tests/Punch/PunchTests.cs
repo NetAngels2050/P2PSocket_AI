@@ -149,14 +149,29 @@ public sealed class PuncherTests
         /// <summary>探测返回的映射端口 = 真实本地口 + 平移量（0=恒等；&gt;0=假映射，该口无人监听）。</summary>
         public int ProbePortShift;
 
+        /// <summary>死端口自钉持有者（ProbeAsync 首次探测时绑定假映射口）。</summary>
+        public UdpClient? Dead;
+
         public Task<IPEndPoint> ProbeAsync(Socket socket, CancellationToken ct)
         {
             // socket 绑 0.0.0.0：模拟 STUN 返回回环地址（+平移量即「映射口≠真实口/不可直达」样）
             var ep = (IPEndPoint)socket.LocalEndPoint!;
             var mapped = new IPEndPoint(IPAddress.Loopback, ep.Port + ProbePortShift);
+            if (ProbePortShift > 0) HoldDeadPort(mapped.Port); // 仅真死端口自钉；shift=0 恒等映射口即本 transport 口，钉住=黑洞自身回包
             Probed.TrySetResult(new EndpointPair(new P2P.Core.Protocol.Endpoint(
                 mapped.Address.ToString(), (ushort)mapped.Port), null));
             return Task.FromResult(mapped);
+        }
+
+        /// <summary>死端口自钉（probePortShift&gt;0 用）：绑定并持有假映射口至测试结束——
+        /// 「主端点必丢」成立且并行测试的临时端口分配无法侵占该口（端口顺序分配落在 +9 邻位时
+        /// 重发 THello1 串入他方握手致 30s 全窗超时实证）；帧入无人读缓冲=黑洞，语义同无人监听。</summary>
+        private void HoldDeadPort(int port)
+        {
+            if (Dead is not null) return;
+            var u = new UdpClient(AddressFamily.InterNetwork);
+            try { u.Client.Bind(new IPEndPoint(IPAddress.Loopback, port)); Dead = u; }
+            catch (SocketException) { u.Dispose(); } // 已被占（罕见）：退回原口径
         }
 
         public Task ReportAsync(Guid sessionId, EndpointPair endpoints, Endpoint[]? localCandidates,
@@ -181,15 +196,17 @@ public sealed class PuncherTests
     }
 
     private static (Puncher Puncher, FakeSeams Seams) Make(EcKeyPair staticKey,
-        int probePortShift = 0, Func<IPAddress?, IReadOnlyList<IPAddress>>? localIps = null)
-        => Make(staticKey, out _, probePortShift, localIps);
+        int probePortShift = 0, Func<IPAddress?, IReadOnlyList<IPAddress>>? localIps = null,
+        PunchOptions? options = null)
+        => Make(staticKey, out _, probePortShift, localIps, options);
 
     private static (Puncher Puncher, FakeSeams Seams) Make(EcKeyPair staticKey, out FakeSeams seams,
-        int probePortShift = 0, Func<IPAddress?, IReadOnlyList<IPAddress>>? localIps = null)
+        int probePortShift = 0, Func<IPAddress?, IReadOnlyList<IPAddress>>? localIps = null,
+        PunchOptions? options = null)
     {
         seams = new FakeSeams { ProbePortShift = probePortShift };
         return (new Puncher(seams.SendRequestAsync, seams.ReportAsync, seams.ProbeAsync, staticKey,
-            localIpEnumerator: localIps), seams);
+            localIpEnumerator: localIps, options: options), seams);
     }
 
     [Fact]
@@ -328,10 +345,14 @@ public sealed class PuncherTests
         var loopback = (Func<IPAddress?, IReadOnlyList<IPAddress>>)
             (static _ => (IReadOnlyList<IPAddress>)[IPAddress.Loopback]);
 
-        var (puncherA, seamsA) = Make(staticA, probePortShift: 9, localIps: loopback);
-        var (puncherB, seamsB) = Make(staticB, probePortShift: 9, localIps: loopback);
+        // PunchTimeout 放大 30s：候选扇出全链真 UDP 回环，满载下线程饿死可致 10s 预算耗尽
+        // （punch_timeout 偶发实证）——测试预算放大不改生产默认。
+        var budget = new PunchOptions { PunchTimeout = TimeSpan.FromSeconds(30) };
+        var (puncherA, seamsA) = Make(staticA, probePortShift: 9, localIps: loopback, options: budget);
+        var (puncherB, seamsB) = Make(staticB, probePortShift: 9, localIps: loopback, options: budget);
         using (puncherA)
         using (puncherB)
+        try
         {
             seamsA.RequestHandler = async (target, trigger, proto, endpoints, candidates, ct) =>
             {
@@ -358,6 +379,11 @@ public sealed class PuncherTests
             Assert.Equal(aEp.Udp!.Port - 9, outcomeB.PeerEndpoint!.Port);
             await outcomeA.Session!.DisposeAsync();
             await outcomeB.Session!.DisposeAsync();
+        }
+        finally
+        {
+            seamsA.Dead?.Dispose(); // 死端口自钉释放（HoldDeadPort 持有至测试结束）
+            seamsB.Dead?.Dispose();
         }
     }
 }

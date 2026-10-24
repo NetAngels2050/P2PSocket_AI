@@ -6,6 +6,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using P2P.Core.Crypto;
 using P2P.Server.Data;
@@ -56,7 +57,7 @@ public sealed class SecurityApiTests : IAsyncLifetime
         _control = new ControlServer(_factory, registry, (_, _) => Task.CompletedTask, time: _time);
         await _control.StartAsync(new IPEndPoint(IPAddress.Loopback, 0));
 
-        var options = new ServerOptions { Listen = { Web = Random.Shared.Next(21000, 24000) } };
+        var options = new ServerOptions { Listen = { Web = 0 } }; // 0=OS 分配：启动后 _web.BoundPort 回读（并行夹具零撞口）
         _web = new ServerWebHostService(options, _time,
             new AdminSessionStore(TimeProvider.System), _factory, _audit, admin, registry, groups,
             alertPusher: alert, blacklist: _blacklist, control: _control)
@@ -67,7 +68,7 @@ public sealed class SecurityApiTests : IAsyncLifetime
 
         _http = new HttpClient(new HttpClientHandler { CookieContainer = new CookieContainer() })
         {
-            BaseAddress = new Uri($"http://127.0.0.1:{options.Listen.Web}/"),
+            BaseAddress = new Uri($"http://127.0.0.1:{_web.BoundPort}/"),
         };
         Assert.Equal(HttpStatusCode.OK,
             (await _http.PostAsJsonAsync("/api/auth/login", new { username = "admin", password = "admin" })).StatusCode);
@@ -84,6 +85,11 @@ public sealed class SecurityApiTests : IAsyncLifetime
 
     private AppDbContext CreateDb() => new(
         new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_db.DataSource).Options);
+
+    /// <summary>裸宿主启动后从 Kestrel 解析地址回读实际端口（Web=0 时 OS 分配）。</summary>
+    private static int BoundPortOf(WebApplication app)
+        => app.Urls.Select(u => Uri.TryCreate(u, UriKind.Absolute, out var x) ? x.Port : -1)
+            .FirstOrDefault(p => p > 0);
 
     private async Task<(HttpStatusCode Status, JsonElement Body)> PostAlertTestAsync()
     {
@@ -298,12 +304,13 @@ public sealed class SecurityApiTests : IAsyncLifetime
         cipher.DecryptOrRaw(new byte[61]); // keyTag 0 不匹配 → 凭据失效口径计数+1（OQ-22②）
 
         var factory = ServerDatabase.CreateFactoryFromDataSource(_db.DataSource, cipher);
-        var port = Random.Shared.Next(21000, 27000);
         var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls("http://127.0.0.1:0"); // 0=OS 分配：启动后 app.Urls 回读（并行夹具零撞口）
         var app = builder.Build();
         new SecurityApi(factory, _time, _audit, cipher: cipher).Map(app);
         await app.StartAsync();
+        var port = BoundPortOf(app);
         try
         {
             using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };

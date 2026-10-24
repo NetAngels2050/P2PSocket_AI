@@ -104,24 +104,26 @@ public sealed class RelayServiceTests : IAsyncLifetime
         return (client, ack.DeviceId);
     }
 
-    /// <summary>走完两段式打洞（0x70→0x71→0x76→Ack）：会话完成入台账，返回 sessionId。</summary>
+    /// <summary>走完两段式打洞（0x70→0x71→0x76→Ack）：会话完成入台账，返回 sessionId。
+    /// 应答等待放宽 15s：满载下服务端信令中转可滞后于 5s 短窗（TimeoutException 实证家族
+    /// 同 STUN 排干——正路径等待放宽，负路径不变）。</summary>
     private static async Task<Guid> CompletePunchAsync(TestPcpClient a, TestPcpClient b, Guid bId)
     {
         await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
             bId, null, "udp", new EndpointPair(new P2P.Core.Protocol.Endpoint("203.0.113.10", 50000), null), null));
-        var invite = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("B 未收到 PunchInvite");
+        var invite = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("B 未收到 PunchInvite");
         await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
             invite.SessionId, new EndpointPair(new P2P.Core.Protocol.Endpoint("198.51.100.20", 50001), null)));
-        var ack = await a.ReceiveAsync<PunchRequestAck>() ?? throw new IOException("A 未收到延后 Ack");
+        var ack = await a.ReceiveAsync<PunchRequestAck>(15000) ?? throw new IOException("A 未收到延后 Ack");
         return ack.SessionId;
     }
 
-    /// <summary>0x74 分配：返回 (A 的 Grant, B 的 Grant)——Grant 向双方下发（02 §6.1②）。</summary>
+    /// <summary>0x74 分配：返回 (A 的 Grant, B 的 Grant)——Grant 向双方下发（02 §6.1②）。等待放宽同上。</summary>
     private static async Task<(RelayGrant A, RelayGrant B)> AllocateAsync(TestPcpClient a, TestPcpClient b, Guid sessionId)
     {
         await a.SendAsync(new RelayAllocate(a.NextSeq(), a.Now(), MsgType.RelayAllocate, sessionId));
-        var ga = await a.ReceiveAsync<RelayGrant>() ?? throw new IOException("A 未收到 RelayGrant");
-        var gb = await b.ReceiveAsync<RelayGrant>() ?? throw new IOException("B 未收到 RelayGrant");
+        var ga = await a.ReceiveAsync<RelayGrant>(15000) ?? throw new IOException("A 未收到 RelayGrant");
+        var gb = await b.ReceiveAsync<RelayGrant>(15000) ?? throw new IOException("B 未收到 RelayGrant");
         return (ga, gb);
     }
 
@@ -621,6 +623,15 @@ public sealed class RelayServiceTests : IAsyncLifetime
         Assert.Equal(expected, _relay.JoinGuard.Dropped);
     }
 
+    /// <summary>等待 Admitted 放行计数到位（同上——「已过闸」是热改时序的唯一可靠收敛点：
+    /// 裸 Delay 无法证明先行 JOIN 已按旧速率处理完毕，满载下全批滞后到新速率后处理即错序）。</summary>
+    private async Task WaitAdmittedAsync(long expected)
+    {
+        for (var i = 0; i < 50 && _relay.JoinGuard.Admitted < expected; i++)
+            await Task.Delay(100);
+        Assert.Equal(expected, _relay.JoinGuard.Admitted);
+    }
+
     [Fact]
     public async Task Relay_JoinRate_同IP超限静默_回填后再入()
     {
@@ -709,14 +720,14 @@ public sealed class RelayServiceTests : IAsyncLifetime
             var udp = await BoundUdpAsync();
             await udp.SendAsync(BuildJoin(unknown), _relayUdp);
         }
-        await Task.Delay(100);
+        await WaitAdmittedAsync(3); // 收敛：三发均已按旧速率过闸（裸 Delay 满载下不保序）
         Assert.Equal(0, _relay.JoinGuard.Dropped);
 
         SetJoinRate("1"); // 热改收紧（JOIN 现读——容量随调用钳制到新值）
         var fourth = await BoundUdpAsync();
         await fourth.SendAsync(BuildJoin(unknown), _relayUdp);
-        await Task.Delay(100);
-        Assert.Equal(0, _relay.JoinGuard.Dropped); // 钳制后余 1 枚可过
+        await WaitAdmittedAsync(4); // 钳制后余 1 枚可过
+        Assert.Equal(0, _relay.JoinGuard.Dropped);
 
         var fifth = await BoundUdpAsync();
         await fifth.SendAsync(BuildJoin(unknown), _relayUdp);

@@ -84,8 +84,11 @@ public sealed class NicHealthMonitorTests
 
         nic.Exists = false; // 模拟外部删除（FR-C-202）
 
+        // restored 折入等待条件：EnsureAsync 完成（EnsureCount 可见）与 Restored 事件执行仅隔
+        // 数语句——满载下监视线程被调度推迟即拉出毫秒窗，等待收敛后再断言防同拍空读
         await UntilAsync(() => Volatile.Read(ref nic.EnsureCount) >= 1
-            && nic.CheckHealth(vip).State == NicHealthState.Healthy, "适配器重建恢复");
+            && Volatile.Read(ref restored) >= 1
+            && nic.CheckHealth(vip).State == NicHealthState.Healthy, "适配器重建恢复+恢复沿触发");
         Assert.True(Volatile.Read(ref nic.RemoveCount) >= 1, "重建前须先 Remove 拆除残留");
         Assert.True(Volatile.Read(ref restored) >= 1, "恢复沿须触发（驱动映射监听重试）");
     }

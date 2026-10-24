@@ -38,7 +38,7 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
         var groupService = new GroupService(_factory, _registry, audit, pusher, invalidation);
         var admin = new AdminService(_factory, _registry, audit, invalidation, listPusher: pusher);
 
-        var options = new ServerOptions { Listen = { Web = Random.Shared.Next(21000, 24000) } };
+        var options = new ServerOptions { Listen = { Web = 0 } }; // 0=OS 分配：启动后 _web.BoundPort 回读（并行夹具零撞口）
         _throttle = new LoginThrottle(); // M5-04：PUT 热更联动件（System 时钟——本夹具无假时钟推进需求）
         _web = new ServerWebHostService(options, TimeProvider.System, new AdminSessionStore(TimeProvider.System),
             _factory, audit, admin, _registry, groupService, null, null, _limiter,
@@ -50,7 +50,7 @@ public sealed class AdminSystemApiTests : IAsyncLifetime
 
         _http = new HttpClient(new HttpClientHandler { CookieContainer = new CookieContainer() })
         {
-            BaseAddress = new Uri($"http://127.0.0.1:{options.Listen.Web}/"),
+            BaseAddress = new Uri($"http://127.0.0.1:{_web.BoundPort}/"),
         };
         Assert.Equal(HttpStatusCode.OK,
             (await _http.PostAsJsonAsync("/api/auth/login", new { username = "admin", password = "admin" })).StatusCode);

@@ -207,13 +207,14 @@ public sealed class AdminServiceTests : IAsyncLifetime
         Assert.Equal(new[] { mid }, inv.AffectedMappingIds);
         Assert.Equal(CapabilityMode.Passive, inv.NewCapability);
 
-        // 不踢线（哑节点继续被动同步）：心跳仍通
+        // 不踢线（哑节点继续被动同步）：心跳仍通。skipInvalidation：监视器兜底扫描可能补推
+        // 同载荷 0x75（M2-13 设计固有双推——扫描落在「写库后/内存降级前」窗口），跳过防误吞
         await a.SendAsync(new Heartbeat(a.NextSeq(), a.Now(), MsgType.Heartbeat));
-        Assert.NotNull(await a.ReceiveSkippingPushesAsync<HeartbeatAck>());
+        Assert.NotNull(await a.ReceiveSkippingPushesAsync<HeartbeatAck>(skipInvalidation: true));
 
         // 主动类 → 2002 + 审计（SEC-51）
         await a.SendAsync(new DeviceListRequest(a.NextSeq(), a.Now(), MsgType.DeviceList, 0, 100));
-        var err = await a.ReceiveAsync<ErrorMessage>();
+        var err = await a.ReceiveSkippingPushesAsync<ErrorMessage>(skipInvalidation: true);
         Assert.Equal(ErrorCode.ForbiddenPassive, err!.Code);
 
         // enable 后恢复 normal（02 §2.5：0x21 属主动类清单，passive 期同连接登录被 2002 拦——
