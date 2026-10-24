@@ -477,10 +477,10 @@ public sealed class RelayServiceTests : IAsyncLifetime
     {
         await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
             bId, null, "udp", new EndpointPair(new P2P.Core.Protocol.Endpoint("203.0.113.10", 50000), null), null));
-        var invite = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("B 未收到 PunchInvite");
+        var invite = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("B 未收到 PunchInvite");
         await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
             invite.SessionId, new EndpointPair(new P2P.Core.Protocol.Endpoint("198.51.100.20", 50001), null)));
-        var ack = await a.ReceiveAsync<PunchRequestAck>() ?? throw new IOException("A 未收到延后 Ack");
+        var ack = await a.ReceiveAsync<PunchRequestAck>(15000) ?? throw new IOException("A 未收到延后 Ack");
         return (invite, ack.SessionId);
     }
 

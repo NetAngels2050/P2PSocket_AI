@@ -105,7 +105,7 @@ public sealed class SignalingTests : IAsyncLifetime
             bId, null, "udp", aEndpoints, null));
 
         // B 收 0x71：A 信息 + A 端点 + N + relayAllowed=false
-        var invite = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("B 未收到 PunchInvite");
+        var invite = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("B 未收到 PunchInvite");
         Assert.Equal(aId, invite.Peer.DeviceId);
         Assert.Equal("initiator", invite.Peer.DeviceName);
         Assert.NotEmpty(invite.Peer.StaticPubKey);
@@ -120,7 +120,7 @@ public sealed class SignalingTests : IAsyncLifetime
             invite.SessionId, bEndpoints));
 
         // A 收延后 Ack：B 信息 + B 端点
-        var ack = await a.ReceiveAsync<PunchRequestAck>() ?? throw new IOException("A 未收到延后 Ack");
+        var ack = await a.ReceiveAsync<PunchRequestAck>(15000) ?? throw new IOException("A 未收到延后 Ack");
         Assert.Equal(invite.SessionId, ack.SessionId);
         Assert.Equal(bId, ack.Peer.DeviceId);
         Assert.Equal("target", ack.Peer.DeviceName);
@@ -145,12 +145,12 @@ public sealed class SignalingTests : IAsyncLifetime
 
         await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
             bId, null, "udp", null, null));
-        var invite = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("B 未收到 PunchInvite");
+        var invite = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("B 未收到 PunchInvite");
         Assert.False(invite.RelayAllowed);
 
         await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
             invite.SessionId, UdpOnly("198.51.100.30", 50002)));
-        var ack = await a.ReceiveAsync<PunchRequestAck>() ?? throw new IOException("A 未收到延后 Ack");
+        var ack = await a.ReceiveAsync<PunchRequestAck>(15000) ?? throw new IOException("A 未收到延后 Ack");
         Assert.False(ack.RelayAllowed);
     }
 
@@ -169,12 +169,12 @@ public sealed class SignalingTests : IAsyncLifetime
 
         await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
             bId, null, "tcp", UdpOnly("203.0.113.10", 50000), requested));
-        var invite = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("B 未收到 PunchInvite");
+        var invite = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("B 未收到 PunchInvite");
         Assert.Equal(expected, invite.PunchCount);
 
         await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
             invite.SessionId, UdpOnly("198.51.100.20", 50001)));
-        var ack = await a.ReceiveAsync<PunchRequestAck>() ?? throw new IOException("A 未收到延后 Ack");
+        var ack = await a.ReceiveAsync<PunchRequestAck>(15000) ?? throw new IOException("A 未收到延后 Ack");
         Assert.Equal(expected, ack.PunchCount); // 双方该次打洞执行同一 N（02 §5.2② 对称性硬约束）
     }
 
@@ -190,14 +190,14 @@ public sealed class SignalingTests : IAsyncLifetime
         await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
             bId, null, "udp", UdpOnly("203.0.113.10", 50000), null,
             LocalCandidates: aCandidates));
-        var invite = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("B 未收到 PunchInvite");
+        var invite = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("B 未收到 PunchInvite");
         Assert.Equal(aCandidates, invite.LocalCandidates); // A 的本机候选原样透传给 B
 
         var bCandidates = new[] { new Endpoint("192.168.1.20", 40002) };
         await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
             invite.SessionId, UdpOnly("198.51.100.20", 50001),
             LocalCandidates: bCandidates));
-        var ack = await a.ReceiveAsync<PunchRequestAck>() ?? throw new IOException("A 未收到延后 Ack");
+        var ack = await a.ReceiveAsync<PunchRequestAck>(15000) ?? throw new IOException("A 未收到延后 Ack");
         Assert.Equal(bCandidates, ack.PeerLocalCandidates); // B 的本机候选原样透传给 A
     }
 
@@ -210,12 +210,12 @@ public sealed class SignalingTests : IAsyncLifetime
 
         await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
             bId, null, "udp", UdpOnly("203.0.113.10", 50000), null));
-        var invite = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("B 未收到 PunchInvite");
+        var invite = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("B 未收到 PunchInvite");
         Assert.Null(invite.LocalCandidates);
 
         await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
             invite.SessionId, UdpOnly("198.51.100.20", 50001)));
-        var ack = await a.ReceiveAsync<PunchRequestAck>() ?? throw new IOException("A 未收到延后 Ack");
+        var ack = await a.ReceiveAsync<PunchRequestAck>(15000) ?? throw new IOException("A 未收到延后 Ack");
         Assert.Null(ack.PeerLocalCandidates);
     }
 
@@ -258,7 +258,7 @@ public sealed class SignalingTests : IAsyncLifetime
         // 第一发：B 空闲 → 立即收到邀请
         await a1.SendAsync(new PunchRequest(a1.NextSeq(), a1.Now(), MsgType.PunchRequest,
             bId, null, "udp", UdpOnly("203.0.113.1", 40001), null));
-        var invite1 = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("第一次未收到邀请");
+        var invite1 = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("第一次未收到邀请");
 
         // 第二发：B 忙 → 排队，不下发邀请、A2 无任何应答
         await a2.SendAsync(new PunchRequest(a2.NextSeq(), a2.Now(), MsgType.PunchRequest,
@@ -269,16 +269,16 @@ public sealed class SignalingTests : IAsyncLifetime
         // B 回 0x76 结束第一会话 → A1 得 Ack；排队项推进 → B 收第二次邀请
         await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
             invite1.SessionId, UdpOnly("198.51.100.1", 41001)));
-        var ack1 = await a1.ReceiveAsync<PunchRequestAck>();
+        var ack1 = await a1.ReceiveAsync<PunchRequestAck>(15000);
         Assert.Equal(invite1.SessionId, ack1!.SessionId);
 
-        var invite2 = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("排队项未推进");
+        var invite2 = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("排队项未推进");
         Assert.NotEqual(invite1.SessionId, invite2.SessionId);
         Assert.Equal("queue-a2", invite2.Peer.DeviceName);
 
         await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
             invite2.SessionId, UdpOnly("198.51.100.2", 41002)));
-        var ack2 = await a2.ReceiveAsync<PunchRequestAck>();
+        var ack2 = await a2.ReceiveAsync<PunchRequestAck>(15000);
         Assert.Equal(invite2.SessionId, ack2!.SessionId);
     }
 
@@ -292,7 +292,7 @@ public sealed class SignalingTests : IAsyncLifetime
 
         await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
             bId, null, "udp", UdpOnly("203.0.113.3", 40003), null));
-        _ = await b.ReceiveAsync<PunchInvite>(); // B 收到邀请但不上报
+        _ = await b.ReceiveAsync<PunchInvite>(15000); // B 收到邀请但不上报
 
         await AssertSilentAsync(a); // 0x76 未达 → Ack 不下发
     }
@@ -329,7 +329,7 @@ public sealed class SignalingTests : IAsyncLifetime
 
         await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
             bId, null, "udp", UdpOnly("203.0.113.4", 40004), null));
-        _ = await b.ReceiveAsync<PunchInvite>(); // B 收到邀请但永不回应
+        _ = await b.ReceiveAsync<PunchInvite>(15000); // B 收到邀请但永不回应
 
         _time.Advance(TimeSpan.FromSeconds(11)); // 超过 10s 会话超时
         var error = await a.ReceiveAsync<ErrorMessage>();
@@ -343,10 +343,10 @@ public sealed class SignalingTests : IAsyncLifetime
     {
         await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
             bId, null, "udp", UdpOnly("203.0.113.10", 50000), null));
-        var invite = await b.ReceiveAsync<PunchInvite>() ?? throw new IOException("B 未收到 PunchInvite");
+        var invite = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("B 未收到 PunchInvite");
         await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
             invite.SessionId, UdpOnly("198.51.100.20", 50001)));
-        var ack = await a.ReceiveAsync<PunchRequestAck>() ?? throw new IOException("A 未收到延后 Ack");
+        var ack = await a.ReceiveAsync<PunchRequestAck>(15000) ?? throw new IOException("A 未收到延后 Ack");
         return ack.SessionId;
     }
 
@@ -375,8 +375,8 @@ public sealed class SignalingTests : IAsyncLifetime
 
         // 中继会话建立（0x74：分配即记录 PunchSessionId，M2-19 反查依据）
         await a.SendAsync(new RelayAllocate(a.NextSeq(), a.Now(), MsgType.RelayAllocate, sessionId));
-        _ = await a.ReceiveAsync<RelayGrant>();
-        _ = await b.ReceiveAsync<RelayGrant>();
+        _ = await a.ReceiveAsync<RelayGrant>(15000);
+        _ = await b.ReceiveAsync<RelayGrant>(15000);
 
         _time.Advance(TimeSpan.FromSeconds(121)); // 台账（120s）过期；中继条目存活（IdleTimeout=1h）
 
