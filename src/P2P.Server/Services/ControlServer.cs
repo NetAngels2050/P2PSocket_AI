@@ -142,7 +142,8 @@ public sealed class ControlServer : IAsyncDisposable
         if (_acceptLoop is not null)
             try { await _acceptLoop.ConfigureAwait(false); } catch { }
         foreach (var session in _sessions.Keys)
-            await session.CloseAsync("server_stopping").ConfigureAwait(false);
+            try { await session.CloseAsync("server_stopping").ConfigureAwait(false); }
+            catch { /* 停机清理不因单会话异常中断（CloseAsync 内部已兜，双保险） */ }
     }
 
     public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);

@@ -485,10 +485,20 @@ public sealed class ControlSession : IAsyncDisposable
             await PersistLastSeenAsync().ConfigureAwait(false); // 05 §5：断连即 last_seen_at 落库
         }
         try { _cts.Cancel(); } catch { }
-        try { await _stream.DisposeAsync(); } catch { }
-        _reader.Complete();
-        _writer.Complete();
-        _sendQueue.Writer.TryComplete();
+        // 拆除与在飞 I/O 天然竞态（发送循环可能正 Flush、writer 缓冲可能有未刷帧——
+        // Complete 会对底层流冲刷缓冲）：管道完成须先于流释放（冲刷时流仍在位），
+        // 且整段容错不外冒（AI-19 清理路径；CI 实证 StopAsync 处 ODE 炸 DisposeAsync）
+        try
+        {
+            _reader.Complete();
+            _writer.Complete();
+            _sendQueue.Writer.TryComplete();
+            await _stream.DisposeAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // 连接已在关停：竞态输家一侧（写已释放流/已完成管道）的异常无意义
+        }
         CryptoUtil.Zero(_connMacKey);
         CryptoUtil.Zero(_deviceSecret);
         _loginEph?.Dispose(); // 用后即焚（07 §10.1：私钥仅存会话内存，连接关闭即弃）
