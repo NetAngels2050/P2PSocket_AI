@@ -124,6 +124,7 @@ public static class PcpCodec
         nameof(RelayAllocate) or nameof(RelayGrant) => MsgType.RelayAllocate,
         nameof(Invalidation) => MsgType.Invalidation,
         nameof(PunchEndpoint) => MsgType.PunchEndpoint,
+        nameof(PunchFire) => MsgType.PunchFire,
         nameof(ErrorMessage) => MsgType.Error,
         _ => null,
     };

@@ -6,6 +6,10 @@
 // - TCP（02 §5.2）：端口 L STUN-TCP 探测（M2-04，单事务即关）→ listen(L)+N 并发 connect
 //   （第 1 条沿用 L，目标统一 portTcp+(N−1)）→ 双方 simultaneous open → 首个完成握手帧交换的
 //   连接胜出、其余关闭；N 以 0x71/0x70 Ack 服务端回填值为准（OQ-19）；
+// - §5.2⑤ 齐射同步+波次补射（2026-10-24）：A 以 0x70 Ack 到达为锚、B 以同刻下发的 0x77 PunchFire
+//   为锚，各倒数同一 Δ（PunchPolicy.TcpVolleyCountdown）到点齐射——SYN 空中交叉，规避「B 建池即打
+//   早于 A 映射建立、SYN 打空门（RST 即死+Windows SYN 预算仅 ~2 次重传）」竞态；打洞窗内每
+//   TcpWaveInterval 重建一波 connect 补射（每波全新 SYN 预算）；锚点丢失（旧服务端）B 超时兜底立即开火；
 // - M2-18 中继回退（02 §4.5/§6.1①）：打洞 Ack 后失败且回退资格合成真 → 0x74 分配 →
 //   JOIN（先 UDP 后 TCP）→ PTP 握手即经中继（加密与路径解耦：同一 TunnelSession 帧改发 relay 地址）；
 // - M2-37 回退复用（05 §4）：回切重打（M2-19 周期）失败再回退时，设备对已有活中继会话 →
@@ -44,6 +48,14 @@ public sealed record PunchOptions
 
     /// <summary>中继握手 THello1 重发步进（覆盖对端 JOIN 就绪窗口：Grant 推送+JOIN 往返）。</summary>
     public TimeSpan RelayHandshakeResendInterval { get; init; } = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>TCP 波次补射步进（02 §5.2③b′ 方案 B）：打洞窗内每步重建一波 N 条 connect
+    ///（全新 socket=全新 SYN 预算，覆盖「对端瞄准点槽位存活」时段）；单测可调（缩短加速/加宽近似单波）。</summary>
+    public TimeSpan TcpWaveInterval { get; init; } = TcpPunchFleet.WaveInterval;
+
+    /// <summary>B 侧 0x77 齐射锚点等待上限（02 §5.2⑤ 方案 A）：超时（旧服务端不推送/丢失）立即
+    /// 开火兜底；取值≈TcpVolleyCountdown+一次控制往返——兜底路径与 A 的倒计时终点仍近似重合。</summary>
+    public TimeSpan PunchFireFallbackTimeout { get; init; } = TimeSpan.FromMilliseconds(600);
 }
 
 /// <summary>打洞结果（本地事件驱动映射状态机；成功带双方端点）。
@@ -115,6 +127,11 @@ public sealed class Puncher : IPuncher, IDisposable
     /// 未装配=不复用（单测缺省行为，与 M2-18 语义一致）。</summary>
     public delegate TunnelSession? LiveRelaySessionLookup(Guid peerDeviceId);
 
+    /// <summary>0x77 齐射锚点等待缝（02 §5.2⑤，宿主接 ControlClient.WaitForPunchFireAsync）：
+    /// true=锚点到（与 A 的 0x70 Ack 同刻下发）→ 倒计时 Δ 后与 A 齐射；false=超时兜底立即开火。
+    /// 未装配=建池即打（单测缺省，行为同旧版——时差由波次补射覆盖）。</summary>
+    public delegate Task<bool> PunchFireWaiter(Guid sessionId, TimeSpan timeout, CancellationToken ct);
+
     private readonly PunchRequestSender _sendPunchRequest;
     private readonly EndpointReporter _reportEndpoints;
     private readonly StunProbeDelegate _probe;
@@ -127,6 +144,7 @@ public sealed class Puncher : IPuncher, IDisposable
     private readonly LiveRelaySessionLookup? _liveRelaySession; // 活中继会话复用缝（缺省不复用，M2-37）
     private readonly Action<string>? _log; // 诊断日志缝（P4 修复：TCP 打洞计划/池收尾线，缺省静默）
     private readonly Func<IPAddress?, IReadOnlyList<IPAddress>> _localIps; // 本机 IP 枚举缝（§5.4 候选源，缺省真实枚举）
+    private readonly PunchFireWaiter? _punchFireWaiter; // 0x77 锚点等待缝（§5.2⑤，缺省建池即打）
     private int _disposed;
 
     public Puncher(PunchRequestSender sendPunchRequest, EndpointReporter reportEndpoints,
@@ -134,7 +152,8 @@ public sealed class Puncher : IPuncher, IDisposable
         ITunnelChannelHandler? handler = null, PunchOptions? options = null,
         StunTcpProbeDelegate? tcpProbe = null, Func<Guid, bool>? relayFallbackLookup = null,
         RelayAllocator? relayAllocator = null, LiveRelaySessionLookup? liveRelaySessionLookup = null,
-        Action<string>? log = null, Func<IPAddress?, IReadOnlyList<IPAddress>>? localIpEnumerator = null)
+        Action<string>? log = null, Func<IPAddress?, IReadOnlyList<IPAddress>>? localIpEnumerator = null,
+        PunchFireWaiter? punchFireWaiter = null)
     {
         _sendPunchRequest = sendPunchRequest;
         _reportEndpoints = reportEndpoints;
@@ -148,6 +167,7 @@ public sealed class Puncher : IPuncher, IDisposable
         _relayAllocator = relayAllocator;
         _liveRelaySession = liveRelaySessionLookup;
         _localIps = localIpEnumerator ?? EnumerateLocalIps;
+        _punchFireWaiter = punchFireWaiter;
     }
 
     // ── 访问方 A（02 §5.1①④⑤ / §5.2①③④）──────────────────────────
@@ -289,12 +309,15 @@ public sealed class Puncher : IPuncher, IDisposable
                         + $" N={n} peerMapped={peerMapped} aim={target}"
                         + (directTargets.Count > 0 ? $" direct=[{string.Join(",", directTargets)}]" : ""));
 
-            // ③④ listen(L) + N 并发 connect → 候选连接扇出 THello1 → 首条 THello2 的连接胜出；
-            //    directTargets 各起拒连重试直连探测（§5.4，后发不扰预测基准）
+            // ③④ listen(L) + N 并发 connect（波次补射）→ 候选连接扇出 THello1 → 首条 THello2 的连接胜出；
+            //    齐射闸（§5.2⑤ 方案 A）：A 以 Ack 到达为锚倒数 Δ——与 B 的 0x77 锚点同刻（服务端背靠背
+            //    下发），双端到点齐射 SYN 空中交叉；directTargets 各起拒连重试直连探测（§5.4，后发不扰预测基准）
             using var initiator = PtpHandshake.StartInitiator(ack.SessionId, _staticKey, ack.Peer.StaticPubKey);
             var fleet = TcpPunchFleet.Create(_options.BindAddress, portL, target, directTargets, n,
                 PtpFrameType.THello2,
-                onConnection: t => t.SendAsync(initiator.THello1Wire, punchCt)); // 建立即发首帧
+                onConnection: t => t.SendAsync(initiator.THello1Wire, punchCt), // 建立即发首帧
+                volleyGate: ct => Task.Delay(PunchPolicy.TcpVolleyCountdown, ct),
+                waveInterval: _options.TcpWaveInterval);
             try
             {
                 using var burstCts = CancellationTokenSource.CreateLinkedTokenSource(punchCt);
@@ -324,9 +347,9 @@ public sealed class Puncher : IPuncher, IDisposable
             {
                 // 池收尾线（P4 修复）：failedConnect>0=有候选被明确拒（RST，过滤/防火墙征象）；
                 // 全 0 而超时=静默丢弃（NAT 不回注/H1 入站拦截）——H4/H1 现场判别依据；
-                // directRefused=直连探测累计拒连（§5.4，重试计数）
+                // waves=波次补射已发波数（failed/(waves×N)≈RST 密度）；directRefused=直连探测累计拒连（§5.4）
                 _log?.Invoke($"池收尾(A) live={fleet.LiveConnections} failedConnect={fleet.FailedConnects}"
-                            + $" directRefused={fleet.DirectRefused}");
+                            + $" waves={fleet.Waves} directRefused={fleet.DirectRefused}");
                 await fleet.DisposeAsync(); // 幂等：成功路径已 Release 胜出，仅关其余 N−1 与 listener
             }
         }
@@ -511,8 +534,22 @@ public sealed class Puncher : IPuncher, IDisposable
                     + $" N={n} peerMapped={peerMapped} aim={target}"
                     + (directTargets.Count > 0 ? $" direct=[{string.Join(",", directTargets)}]" : ""));
 
-        // 建池先于 0x76：connect 的 SYN 尽早出发与 A 交叉（小时差靠 SYN 重传覆盖，02 §5.2 实现备注）
-        var fleet = TcpPunchFleet.Create(_options.BindAddress, portL, target, directTargets, n, PtpFrameType.THello1);
+        // 建池先于 0x76（listen 口尽早开门迎 A 的直连探测/accept）；齐射经锚点闸（§5.2⑤ 方案 A）：
+        // 等 0x77 PunchFire（服务端与 A 的 Ack 同刻下发）→ 双端各倒数同一 Δ 到点齐射（SYN 空中交叉，
+        // 规避旧版「建池即打早于 A 映射建立、SYN 打空门」竞态）；锚点超时/缝未装配 → 立即开火兜底
+        //（旧行为，残余时差由波次补射覆盖）
+        var fleet = TcpPunchFleet.Create(_options.BindAddress, portL, target, directTargets, n, PtpFrameType.THello1,
+            volleyGate: async ct =>
+            {
+                if (_punchFireWaiter is null) return; // 单测缺省：建池即打
+                bool fired;
+                try { fired = await _punchFireWaiter(invite.SessionId, _options.PunchFireFallbackTimeout, ct); }
+                catch (OperationCanceledException) { throw; } // 打洞窗收尾/胜出：照常出闸取消
+                catch { fired = false; }                       // 等待器异常：兜底立即开火
+                _log?.Invoke($"锚点(B) fired={fired}");         // 现场判 0x77 链路（false=旧服务端/丢失）
+                if (fired) await Task.Delay(PunchPolicy.TcpVolleyCountdown, ct); // 与 A 的 Ack 锚同 Δ
+            },
+            waveInterval: _options.TcpWaveInterval);
         try
         {
             await _reportEndpoints(invite.SessionId,
@@ -534,7 +571,7 @@ public sealed class Puncher : IPuncher, IDisposable
         finally
         {
             _log?.Invoke($"池收尾(B) live={fleet.LiveConnections} failedConnect={fleet.FailedConnects}"
-                        + $" directRefused={fleet.DirectRefused}");
+                        + $" waves={fleet.Waves} directRefused={fleet.DirectRefused}");
             await fleet.DisposeAsync(); // 幂等：成功路径已 Release 胜出，仅关其余候选与 listener
         }
     }

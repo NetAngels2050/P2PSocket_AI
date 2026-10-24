@@ -477,7 +477,11 @@ public sealed class ClientRuntime : IAsyncDisposable
             // TCP 打洞诊断日志缝（P4 修复）：计划线+池收尾线——结果线由调度器既有四型日志承载
             log: m => Log?.Invoke($"[punch-tcp] {m}"),
             // 本机直连候选枚举缝（§5.4）：生产缺省真实枚举；NatSimulator 场景注入空表/别名
-            localIpEnumerator: _options.LocalIpEnumeratorOverride));
+            localIpEnumerator: _options.LocalIpEnumeratorOverride,
+            // 0x77 齐射锚点等待缝（§5.2⑤ 方案 A）：B 侧打洞齐射等服务器锚点（与 A 的 Ack 同刻下发）
+            // 后与 A 各倒数同一 Δ 到点齐射；超时（旧服务端）兜底立即开火
+            punchFireWaiter: (sessionId, timeout, token) =>
+                _control.WaitForPunchFireAsync(sessionId, timeout, token)));
         Log?.Invoke($"打洞器已接线（STUN={stunEp?.ToString() ?? "解析失败"}，派生自控制地址 :3478，TD-07）");
     }
 

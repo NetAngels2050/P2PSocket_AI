@@ -15,6 +15,15 @@ public class PcpBasicMessageTests
     }
 
     [Fact]
+    public void PunchFire_RoundTrip_AllFieldsPreserved()
+    {
+        // 0x77 S→C 齐射锚点（02 §5.2⑤）：与 0x73 PunchRetry 同构（头三字段+sessionId）
+        var msg = new PunchFire(9, 42UL, MsgType.PunchFire,
+            Guid.Parse("01234567-89ab-cdef-0123-456789abcdef"));
+        MsgAssert.Equal(msg, PcpCodec.Decode<PunchFire>(PcpCodec.Encode(msg)));
+    }
+
+    [Fact]
     public void HelloAck_RoundTrip_AllFieldsPreserved()
     {
         var msg = new HelloAck(1, 99UL, MsgType.Hello, "1.0.0", ProtocolVersion.Current,

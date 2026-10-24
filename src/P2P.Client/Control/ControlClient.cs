@@ -11,6 +11,7 @@
 // - 升级引导（M2-26，FR-C-904/02 §2.3）：Hello 5004 版本不符 → 受理窗内发无签名 0x03 →
 //   UpdateInfoResponse 缓存（LastUpgradeInfo）+ UpgradeRequired 事件（宿主接 WS/浏览器引导）
 //   → 仍抛出保持退避重连（每轮重取，升级信息随服务端配置演进）；已建立会话 0x03 同族应答照常。
+using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using System.Net.Sockets;
 using MessagePack;
@@ -85,6 +86,7 @@ public sealed class ControlClient : IAsyncDisposable
     private long _lastHeartbeatSentAt;
     private volatile UpdateInfoResponse? _lastUpgradeInfo; // 最近版本拒答窗口取回的升级信息（M2-26）
     private PendingAck? _pending;
+    private readonly ConcurrentDictionary<Guid, TaskCompletionSource<bool>> _punchFires = new(); // 0x77 等待器（每打洞会话至多一个）
     private int _state = (int)ControlClientState.Idle;
     private CapabilityMode _capability = CapabilityMode.Normal;
     private bool _stopped;
@@ -204,6 +206,28 @@ public sealed class ControlClient : IAsyncDisposable
 
     /// <summary>出站 seq（心跳与请求并发，原子递增）。</summary>
     public uint NextSeq() => (uint)Interlocked.Increment(ref _selfSeq);
+
+    /// <summary>等待 0x77 PunchFire 齐射锚点（02 §5.2⑤，被邀请方 Puncher 经缝调用）：
+    /// 会话锚点已到/到达即返 true；超 <paramref name="timeout"/> 未到（旧服务端不推送/丢失）返 false，
+    /// 调用方兜底立即开火。等待先于推送注册也安全（GetOrAdd 同键汇合）；断线重连期间等待照常走超时。</summary>
+    public async Task<bool> WaitForPunchFireAsync(Guid sessionId, TimeSpan timeout, CancellationToken ct = default)
+    {
+        var tcs = _punchFires.GetOrAdd(sessionId,
+            _ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
+        try
+        {
+            await tcs.Task.WaitAsync(timeout, ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+        finally
+        {
+            _punchFires.TryRemove(sessionId, out _); // 每会话单等待器：出表防累积（晚到锚点对已出表会话无消费者）
+        }
+    }
 
     /// <summary>校准后时间戳（OQ-12：全部出站消息 timestampMs 用此时钟）。</summary>
     public ulong TimestampMs() => Clock.NowRemoteMs(_time);
@@ -534,6 +558,13 @@ public sealed class ControlClient : IAsyncDisposable
                 // 受影响映射置 invalid 由宿主 OnServerPush 消费（05 §4）；0x75 恒为推送无 pending 配对
                 if (inv.NewCapability is { } cap) SetCapability(cap);
                 ServerPush?.Invoke(inv);
+                return;
+            case MsgType.PunchFire:
+                var fire = PcpCodec.Decode<PunchFire>(msgpack);
+                // 0x77 齐射锚点（02 §5.2⑤）：纯推送无 pending 配对，唯一消费者=WaitForPunchFireAsync 等待器
+                _punchFires.GetOrAdd(fire.SessionId,
+                    _ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously))
+                    .TrySetResult(true);
                 return;
             default:
                 DeliverAckOrPush(DecodeKnown(msgpack, header.MsgType));

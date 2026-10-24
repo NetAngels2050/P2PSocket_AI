@@ -129,6 +129,29 @@ public sealed class SignalingTests : IAsyncLifetime
         Assert.True(ack.RelayAllowed);
     }
 
+    // ── §5.2⑤（2026-10-24）：0x76 后 B 侧收 0x77 齐射锚点（与 A 的延后 Ack 同刻下发）──
+
+    [Fact]
+    public async Task Punch_FireAnchor_PushedToTarget_AlongsideDelayedAck()
+    {
+        var (a, _, _) = await RegisterAsync("fire-a");
+        var (b, bId, _) = await RegisterAsync("fire-b");
+        var aEndpoints = UdpOnly("203.0.113.10", 50000);
+
+        await a.SendAsync(new PunchRequest(a.NextSeq(), a.Now(), MsgType.PunchRequest,
+            bId, null, "tcp", aEndpoints, null));
+        var invite = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("B 未收到 PunchInvite");
+
+        // B 回 0x76 → 服务端向 A 下发延后 Ack 的同一时刻向 B 推 0x77 锚点（sessionId 同源）
+        await b.SendAsync(new PunchEndpoint(b.NextSeq(), b.Now(), MsgType.PunchEndpoint,
+            invite.SessionId, UdpOnly("198.51.100.20", 50001)));
+
+        var fire = await b.ReceiveAsync<PunchFire>(15000) ?? throw new IOException("B 未收到 PunchFire");
+        Assert.Equal(invite.SessionId, fire.SessionId);
+        var ack = await a.ReceiveAsync<PunchRequestAck>(15000) ?? throw new IOException("A 未收到延后 Ack");
+        Assert.Equal(invite.SessionId, ack.SessionId);
+    }
+
     // ── M2-07：relay_enabled=0 → relayAllowed=false 全链路 ─────────────
 
     [Fact]
@@ -272,7 +295,8 @@ public sealed class SignalingTests : IAsyncLifetime
         var ack1 = await a1.ReceiveAsync<PunchRequestAck>(15000);
         Assert.Equal(invite1.SessionId, ack1!.SessionId);
 
-        var invite2 = await b.ReceiveAsync<PunchInvite>(15000) ?? throw new IOException("排队项未推进");
+        var invite2 = await b.ReceiveSkippingPushesAsync<PunchInvite>(15000, skipPunchFire: true)
+            ?? throw new IOException("排队项未推进");
         Assert.NotEqual(invite1.SessionId, invite2.SessionId);
         Assert.Equal("queue-a2", invite2.Peer.DeviceName);
 
@@ -362,7 +386,8 @@ public sealed class SignalingTests : IAsyncLifetime
         // A 侧同族 0x73 应答（受理回执）+ B 侧推送（重打预备通知）：载荷均为原 sessionId（02 §6.2）
         var ackA = await a.ReceiveAsync<PunchRetry>() ?? throw new IOException("A 未收到回切应答");
         Assert.Equal(sessionId, ackA.SessionId);
-        var pushB = await b.ReceiveAsync<PunchRetry>() ?? throw new IOException("B 未收到重打通知");
+        var pushB = await b.ReceiveSkippingPushesAsync<PunchRetry>(skipPunchFire: true)
+            ?? throw new IOException("B 未收到重打通知");
         Assert.Equal(sessionId, pushB.SessionId);
     }
 
@@ -376,14 +401,14 @@ public sealed class SignalingTests : IAsyncLifetime
         // 中继会话建立（0x74：分配即记录 PunchSessionId，M2-19 反查依据）
         await a.SendAsync(new RelayAllocate(a.NextSeq(), a.Now(), MsgType.RelayAllocate, sessionId));
         _ = await a.ReceiveAsync<RelayGrant>(15000);
-        _ = await b.ReceiveAsync<RelayGrant>(15000);
+        _ = await b.ReceiveSkippingPushesAsync<RelayGrant>(15000, skipPunchFire: true);
 
         _time.Advance(TimeSpan.FromSeconds(121)); // 台账（120s）过期；中继条目存活（IdleTimeout=1h）
 
         await a.SendAsync(new PunchRetry(a.NextSeq(), a.Now(), MsgType.PunchRetry, sessionId));
         var ackA = await a.ReceiveAsync<PunchRetry>() ?? throw new IOException("活中继反查未生效");
         Assert.Equal(sessionId, ackA.SessionId);
-        _ = await b.ReceiveAsync<PunchRetry>();
+        _ = await b.ReceiveSkippingPushesAsync<PunchRetry>(skipPunchFire: true);
     }
 
     [Fact]
@@ -395,7 +420,7 @@ public sealed class SignalingTests : IAsyncLifetime
 
         // 被邀请方（非发起方）不可触发回切协调：1001（防双端同时重打，02 §6.2）
         await b.SendAsync(new PunchRetry(b.NextSeq(), b.Now(), MsgType.PunchRetry, sessionId));
-        var error = await b.ReceiveAsync<ErrorMessage>();
+        var error = await b.ReceiveSkippingPushesAsync<ErrorMessage>(skipPunchFire: true);
         Assert.Equal(ErrorCode.BadRequest, error!.Code);
     }
 

@@ -290,7 +290,56 @@ public sealed class TcpPunchFleetTests
             new IPEndPoint(IPAddress.Loopback, qbase + 1), null, 2, PtpFrameType.THello1);
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(1200));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fleet.WaitFrameAsync(cts.Token));
-        await UntilAsync(() => fleet.FailedConnects == 2, "两条 connect 均被拒（无监听端口）");
+        await UntilAsync(() => fleet.FailedConnects >= 2, "两条 connect 均被拒（无监听端口）——波次补射下计数只增不减");
+        listener.Stop();
+    }
+
+    // ── §5.2⑤ 齐射同步+波次补射（2026-10-24）：开火闸延迟首发、首波 RST 后对端晚开门由后续波命中 ──
+
+    [Fact]
+    public async Task 开火闸_闸前不发射_闸开即发首波()
+    {
+        var l = FreePort();
+        var targetPort = FreePortApart(l);
+        var listener = new TcpListener(IPAddress.Loopback, targetPort);
+        listener.Start(8);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var fleet = TcpPunchFleet.Create(IPAddress.Loopback, l,
+            new IPEndPoint(IPAddress.Loopback, targetPort), null, 3, PtpFrameType.THello1,
+            volleyGate: _ => gate.Task);
+        await Task.Delay(300); // 闸未开：零发射、零连接（listen 口已就绪但 connect 未出发）
+        Assert.Equal(0, fleet.Waves);
+        Assert.Equal(0, fleet.LiveConnections);
+
+        gate.SetResult();
+        var accepted = await AcceptAsync(listener, 3, "闸开首波 3 条 connect");
+        Assert.Equal(1, fleet.Waves);
+        Assert.Equal(l, fleet.FirstConnectLocalPort); // 首波首槽仍沿用端口 L（02 §5.2③b）
+        foreach (var s in accepted) s.Dispose();
+    }
+
+    [Fact]
+    public async Task 波次补射_首波RST后对端晚开门_后续波命中()
+    {
+        // §5.2③b′：对端监听口晚于首波就绪（B 早打 A 空门竞态的回环投影）——首波 connect 全 RST
+        // 阵亡，后续波以全新 socket（全新 SYN 预算）在门开时段补射命中
+        var l = FreePort();
+        var targetPort = FreePortApart(l);
+        await using var fleet = TcpPunchFleet.Create(IPAddress.Loopback, l,
+            new IPEndPoint(IPAddress.Loopback, targetPort), null, 2, PtpFrameType.THello1,
+            waveInterval: TimeSpan.FromMilliseconds(150));
+        await UntilAsync(() => fleet.FailedConnects >= 2, "首波 2 条 connect 均被拒（门未开）");
+
+        var listener = new TcpListener(IPAddress.Loopback, targetPort);
+        listener.Start(4); // 对端门晚就绪
+        var accepted = await AcceptAsync(listener, 1, "后续波补射连入晚开的门");
+        await WriteFramedAsync(accepted[0], Hello1Wire());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var (_, frame) = await fleet.WaitFrameAsync(cts.Token);
+        Assert.Equal(Hello1Wire(), frame);
+        Assert.True(fleet.Waves >= 2, $"后续波已补射（waves={fleet.Waves}）");
         listener.Stop();
     }
 
@@ -325,7 +374,7 @@ public sealed class TcpPunchFleetTests
         await peerSide.SendAsync(wire2); // 对端回 THello2 → 直连连接胜出
         var got = await fleet.WaitFrameAsync(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
         Assert.Equal(wire2, got.Frame);
-        await UntilAsync(() => fleet.FailedConnects == 2, "预测 connect 2 条均被拒（死端口）");
+        await UntilAsync(() => fleet.FailedConnects >= 2, "预测 connect 2 条均被拒（死端口）——波次补射下计数只增不减");
         Assert.Equal(0, fleet.DirectRefused);  // 直连一次命中：无拒连计数
     }
 
@@ -350,7 +399,7 @@ public sealed class TcpPunchFleetTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var (_, frame) = await fleet.WaitFrameAsync(cts.Token);
         Assert.Equal(Hello1Wire(), frame);
-        await UntilAsync(() => fleet.FailedConnects == 1, "预测 connect 1 条被拒（分账）");
+        await UntilAsync(() => fleet.FailedConnects >= 1, "预测 connect 1 条被拒（分账）——波次补射下计数只增不减");
         Assert.True(fleet.DirectRefused >= 1); // 拒连计数保留（重试史）——不污预测分账
         listener.Stop();
     }
@@ -453,11 +502,13 @@ public sealed class PuncherTcpTests
 
     private static (Puncher Puncher, FakeTcpSeams Seams) Make(EcKeyPair staticKey,
         int mappedPortShift = 0, PunchOptions? options = null,
-        Func<IPAddress?, IReadOnlyList<IPAddress>>? localIps = null)
+        Func<IPAddress?, IReadOnlyList<IPAddress>>? localIps = null,
+        Puncher.PunchFireWaiter? punchFireWaiter = null)
     {
         var seams = new FakeTcpSeams { MappedPortShift = mappedPortShift };
         return (new Puncher(seams.SendRequestAsync, seams.ReportAsync, UdpProbeUnused, staticKey,
-            options: options, tcpProbe: seams.TcpProbeAsync, localIpEnumerator: localIps), seams);
+            options: options, tcpProbe: seams.TcpProbeAsync, localIpEnumerator: localIps,
+            punchFireWaiter: punchFireWaiter), seams);
     }
 
     /// <summary>回环枚举缝（§5.4 用例）：候选=127.0.0.1×监听口——回环 fabric 即「同网段/公网可达」。</summary>
@@ -526,6 +577,96 @@ public sealed class PuncherTcpTests
             var rtt = await outcomeA.Session!.PingAsync();
             Assert.True(rtt >= TimeSpan.Zero);
             await outcomeA.Session.DisposeAsync();
+            await outcomeB.Session!.DisposeAsync();
+        }
+    }
+
+    // ── §5.2⑤ 齐射锚点（2026-10-24）：B 侧开火闸走 0x77 锚点倒计时 / 超时兜底立即开火 ──
+
+    [Fact]
+    public async Task B侧锚点闸_收到PunchFire倒计时开火_全链路成交()
+    {
+        // A 以 Ack 到达为锚、B 以 0x77（缝注入即时 true）为锚，各倒数同一 Δ（PunchPolicy.
+        // TcpVolleyCountdown）到点齐射——回环下两波重合即成交；锚点缝以 invite sessionId 调用
+        using var staticA = EcKeyPair.Generate();
+        using var staticB = EcKeyPair.Generate();
+        var deviceA = Guid.NewGuid();
+        var deviceB = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+        Guid? seenFireSession = null;
+
+        var options = new PunchOptions { TcpWaveInterval = TimeSpan.FromMilliseconds(150) };
+        var (puncherA, seamsA) = Make(staticA, options: options);
+        var (puncherB, seamsB) = Make(staticB, options: options,
+            punchFireWaiter: (sid, _, _) => { seenFireSession = sid; return Task.FromResult(true); });
+        using (puncherA)
+        using (puncherB)
+        {
+            seamsA.RequestHandler = async (target, trigger, proto, endpoints, candidates, ct) =>
+            {
+                var bReported = await seamsB.Reported.Task;
+                return new PunchRequestAck(0, 0, MsgType.PunchRequest, sessionId,
+                    new PeerInfo(deviceB, "B", "b00000", staticB.ExportPublicKey()),
+                    new EndpointPair(null, bReported.Tcp), PunchCount: 1, RelayAllowed: false);
+            };
+
+            var outcomeATask = puncherA.InitiateAsync(deviceB, null, "tcp");
+            var aEp = await seamsA.Probed.Task;
+            var invite = new PunchInvite(0, 0, MsgType.PunchInvite, sessionId,
+                new PeerInfo(deviceA, "A", "a00000", staticA.ExportPublicKey()),
+                new EndpointPair(null, aEp.Tcp), PunchCount: 1, false);
+            var outcomeB = await puncherB.RespondAsync(invite);
+            var outcomeA = await outcomeATask;
+
+            Assert.True(outcomeA.Ok, outcomeA.FailReason);
+            Assert.True(outcomeB.Ok, outcomeB.FailReason);
+            Assert.Equal(sessionId, seenFireSession); // 锚点等待以 invite 会话为键
+            await outcomeA.Session!.DisposeAsync();
+            await outcomeB.Session!.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task B侧锚点闸_锚点超时兜底立即开火_全链路仍成交()
+    {
+        // 混布降级：旧服务端不推 0x77 → 等待器超时返 false → B 立即开火（旧行为）；
+        // 与 A 倒计时的残余时差由波次补射覆盖（TcpWaveInterval=150ms）
+        using var staticA = EcKeyPair.Generate();
+        using var staticB = EcKeyPair.Generate();
+        var deviceA = Guid.NewGuid();
+        var deviceB = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+
+        var options = new PunchOptions
+        {
+            TcpWaveInterval = TimeSpan.FromMilliseconds(150),
+            PunchFireFallbackTimeout = TimeSpan.FromMilliseconds(100),
+        };
+        var (puncherA, seamsA) = Make(staticA, options: options);
+        var (puncherB, seamsB) = Make(staticB, options: options,
+            punchFireWaiter: async (_, timeout, ct) => { await Task.Delay(timeout, ct); return false; });
+        using (puncherA)
+        using (puncherB)
+        {
+            seamsA.RequestHandler = async (target, trigger, proto, endpoints, candidates, ct) =>
+            {
+                var bReported = await seamsB.Reported.Task;
+                return new PunchRequestAck(0, 0, MsgType.PunchRequest, sessionId,
+                    new PeerInfo(deviceB, "B", "b00000", staticB.ExportPublicKey()),
+                    new EndpointPair(null, bReported.Tcp), PunchCount: 1, RelayAllowed: false);
+            };
+
+            var outcomeATask = puncherA.InitiateAsync(deviceB, null, "tcp");
+            var aEp = await seamsA.Probed.Task;
+            var invite = new PunchInvite(0, 0, MsgType.PunchInvite, sessionId,
+                new PeerInfo(deviceA, "A", "a00000", staticA.ExportPublicKey()),
+                new EndpointPair(null, aEp.Tcp), PunchCount: 1, false);
+            var outcomeB = await puncherB.RespondAsync(invite);
+            var outcomeA = await outcomeATask;
+
+            Assert.True(outcomeA.Ok, outcomeA.FailReason);
+            Assert.True(outcomeB.Ok, outcomeB.FailReason);
+            await outcomeA.Session!.DisposeAsync();
             await outcomeB.Session!.DisposeAsync();
         }
     }

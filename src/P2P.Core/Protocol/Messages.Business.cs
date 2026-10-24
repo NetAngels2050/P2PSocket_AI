@@ -549,6 +549,19 @@ public sealed record PunchRetry(
     [property: Key(2)] byte MsgType,
     [property: Key(3)] Guid SessionId) : IPcpMessage;
 
+/// <summary>0x77 S→C（发往被邀请方）：齐射锚点——服务端在向 A 下发 0x70 延后 Ack 的**同一时刻**
+/// 推送给 B（02 §5.2⑤ 同锚点倒计时）；B 收到后与 A 各自从消息到达起倒数同一 Δ
+///（<see cref="PunchPolicy.TcpVolleyCountdown"/>，双端共享常量）到点齐射——两消息同刻出发，
+/// 开火时刻差≈两条控制连接的投递时差（远小于对端 RTT），SYN 在空中交叉，规避
+/// 「B 结构性早打 A 空门」竞态。旧服务端不推送 → B 侧等待器超时兜底立即开火（行为同旧版，
+/// 由波次补射覆盖时差）；旧客户端未知类型容忍降级（02 §7）。</summary>
+[MessagePackObject]
+public sealed record PunchFire(
+    [property: Key(0)] uint Seq,
+    [property: Key(1)] ulong TimestampMs,
+    [property: Key(2)] byte MsgType,
+    [property: Key(3)] Guid SessionId) : IPcpMessage;
+
 /// <summary>0x74 C→S：申请中继会话（打洞失败且目标设备回退开启，OQ-10）。</summary>
 [MessagePackObject]
 public sealed record RelayAllocate(

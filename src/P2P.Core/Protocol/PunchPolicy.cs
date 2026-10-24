@@ -13,4 +13,9 @@ public static class PunchPolicy
     /// <summary>0x70.punchConcurrency 合法化：null（未携带/旧端）或越界 → 缺省 3；1~5 原样采纳。</summary>
     public static byte Normalize(byte? requested)
         => requested is >= MinConcurrency and <= MaxConcurrency ? requested.Value : DefaultConcurrency;
+
+    /// <summary>TCP 齐射同步倒计时 Δ（02 §5.2⑤ 同锚点倒计时，双端共享常量——AI-11 单一事实来源）：
+    /// A 以 0x70 延后 Ack 到达为锚、B 以同刻下发的 0x77 PunchFire 到达为锚，各自倒数 Δ 后齐射，
+    /// 开火时刻差≈两条控制消息的投递时差。Δ 须大于该时差（数百毫秒量级余量）且远小于打洞窗。</summary>
+    public static readonly TimeSpan TcpVolleyCountdown = TimeSpan.FromMilliseconds(400);
 }

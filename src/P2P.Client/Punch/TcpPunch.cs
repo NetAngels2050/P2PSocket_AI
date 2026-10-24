@@ -1,14 +1,19 @@
 // M2-16 TCP 打洞（02 §5.2、FR-C-402、TD-10/13、OQ-1/19）：
 // - TcpPunchPlan：目标端口偏移纯逻辑（Offsets 扩展点，当前单元素 [N−1]）；
 // - TcpPunchFleet：连接池——本地端口 L listen（SO_REUSEADDR；Linux 加 SO_REUSEPORT）+
-//   N 条并发 connect（第 1 条沿用 L，其余系统分配不同本地端口避免重复四元组），
-//   connect 成功 / listen accept 任一先到均入池；打洞握手由调用方在池上扇出/等待，
-//   首个完成帧交换的连接胜出（对端只在收到帧的连接上应答，天然消歧），其余随池销毁关闭。
+//   N 条并发 connect **波次补射**（每 WaveInterval 重建一波；第 1 条沿用 L，其余系统分配不同
+//   本地端口避免重复四元组），可选**开火闸**（volleyGate：方案 A 同锚点倒计时——过闸才发首波；
+//   null=建池即打），connect 成功 / listen accept 任一先到均入池；打洞握手由调用方在池上
+//   扇出/等待，首个完成帧交换的连接胜出（对端只在收到帧的连接上应答，天然消歧），其余随池销毁关闭。
 // 双方对称执行（TCP simultaneous open）：SYN 交叉在两台 NAT 间完成同时打开。
 // §5.4 直连优先（2026-10-21）：Create 另收 directTargets（对端映射端点原样 + 对端本机候选）——
 // N 条预测 connect **先发**（直连探测后发：避免吞掉本端 NAT 顺序分配端口、污染 +(N−1) 预测基准），
 // 随后每个直连目标起独立拒连重试探测（250ms 步进至打洞窗收尾；onConnection 扇出移入
 // AddConnection 统一触发——accept 侧连入也即时发 THello1，对端公网/同网段可达时即刻命中）。
+// §5.2⑤ 齐射同步+波次（2026-10-24）：结构性竞态=被邀请方建池即打、发起方须待延后 Ack 才瞄——
+// B 的 SYN 常落在 A 映射建立前的空门上（RST 即死且 NAT 映射随 socket 释放），Windows SYN 预算
+// 仅 ~2 次重传盖不住时差。两层修复：A/B 经 0x70 Ack/0x77 PunchFire 同刻锚点各倒数同一 Δ 齐射
+// （方案 A）；窗口内波次补射覆盖「对端槽位存活」时段（方案 B）。
 using System.Net;
 using System.Net.Sockets;
 using P2P.Client.Tunnel;
@@ -56,10 +61,16 @@ internal sealed class TcpPunchFleet : IAsyncDisposable
     private int _failedConnects;
     private int _directRefused;
     private int _firstConnectLocalPort;
+    private int _waves;
     private int _disposed;
 
     /// <summary>直连探测拒连（RST）重试步进（§5.4：对端 listen 口晚就绪的竞态窗口覆盖）。</summary>
     public static readonly TimeSpan DirectRetryInterval = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>波次补射缺省步进（02 §5.2③b′）：每波 connect 全新 socket=全新 SYN 预算
+    ///（Windows 默认 SYN 仅重传 ~2 次、单波 2~3s 即耗尽），步进取「对端瞄准点槽位存活期
+    ///（SYN_SENT 重传窗）」的分数即可连续覆盖；测试可经 Create 参数缩短。</summary>
+    public static readonly TimeSpan WaveInterval = TimeSpan.FromMilliseconds(800);
 
     private TcpPunchFleet(byte awaitedType, Func<TcpFrameTransport, ValueTask>? onConnection)
     {
@@ -68,15 +79,19 @@ internal sealed class TcpPunchFleet : IAsyncDisposable
     }
 
     /// <summary>
-    /// 建池：本地端口 L listen + N 条并发 connect（第 1 条沿用 L、其余系统分配），
-    /// 随后对 directTargets 各起一条**拒连重试**的直连探测（§5.4：预测 connect 先发，
+    /// 建池：本地端口 L listen + N 条并发 connect（波次补射，可经开火闸延迟首发；第 1 条沿用 L、
+    /// 其余系统分配），随后对 directTargets 各起一条**拒连重试**的直连探测（§5.4：预测 connect 先发，
     /// 直连探测后发——不吞本端 NAT 顺序分配端口、保 +(N−1) 预测基准）。
     /// </summary>
     /// <param name="onConnection">连接入池即回调（connect 成功/listen accept/直连探测命中统一触发；
     /// 发起方在其上扇出 THello1；尽力而为，异常不阻断）。</param>
+    /// <param name="volleyGate">开火闸（02 §5.2⑤ 方案 A）：非 null 时首波 connect 待闸开放才发射
+    ///（A=Ack 到达倒计时 Δ；B=等 0x77 锚点+倒计时 Δ）；null=建池即打（旧行为/单测缺省）。</param>
+    /// <param name="waveInterval">波次补射步进（缺省 <see cref="WaveInterval"/>；单测可缩短加速）。</param>
     public static TcpPunchFleet Create(IPAddress? bindAddress, int localPortL, IPEndPoint target,
         IReadOnlyList<IPEndPoint>? directTargets, int concurrency, byte awaitedFrameType,
-        Func<TcpFrameTransport, ValueTask>? onConnection = null)
+        Func<TcpFrameTransport, ValueTask>? onConnection = null,
+        Func<CancellationToken, Task>? volleyGate = null, TimeSpan? waveInterval = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(concurrency, 1);
         var fleet = new TcpPunchFleet(awaitedFrameType, onConnection);
@@ -89,16 +104,11 @@ internal sealed class TcpPunchFleet : IAsyncDisposable
         fleet._listener = listener;
         fleet._acceptLoop = fleet.AcceptLoopAsync();
 
-        // b. N 条并发 connect：目标统一 portTcp+(N−1)；第 1 条 bind L，其余 bind 0（不同本地端口，
-        //    避免同源端口×同目标端口的重复四元组被 OS 拒绝——02 §5.2 实现备注）
-        for (var i = 0; i < concurrency; i++)
-        {
-            var s = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            SetPunchReuse(s);
-            s.Bind(new IPEndPoint(bindAddress ?? IPAddress.Any, i == 0 ? localPortL : 0));
-            if (i == 0) fleet._firstConnectLocalPort = ((IPEndPoint)s.LocalEndPoint!).Port;
-            fleet._connects.Add(fleet.ConnectOneAsync(s, target));
-        }
+        // b. N 条并发 connect（波次补射+可选开火闸）：目标统一 portTcp+(N−1)；每波首条在 L 槽
+        //    空闲时 bind L（02 §5.2③b），其余 bind 0（不同本地端口，避免同源端口×同目标端口的
+        //    重复四元组被 OS 拒绝——02 §5.2 实现备注）
+        fleet._connects.Add(fleet.VolleyAsync(bindAddress, localPortL, target, concurrency,
+            volleyGate, waveInterval ?? WaveInterval));
 
         // c. 直连探测（§5.4）：每目标独立拒连重试（bind 0；成功即入池扇出）
         if (directTargets is not null)
@@ -139,6 +149,48 @@ internal sealed class TcpPunchFleet : IAsyncDisposable
 
     /// <summary>诊断：直连探测累计拒连（RST）次数（§5.4；重试计数，与预测 connect 失败分账）。</summary>
     public int DirectRefused => Volatile.Read(ref _directRefused);
+
+    /// <summary>诊断：已发波次数（池收尾线与 FailedConnects 对照：RST 密度=failed/(waves×N)）。</summary>
+    public int Waves => Volatile.Read(ref _waves);
+
+    /// <summary>波次补射（02 §5.2③b′）：先过开火闸（null=建池即打），随后打洞窗内每
+    /// <paramref name="waveInterval"/> 重建一波 N 条 connect——每波全新 socket=全新 SYN 预算，
+    /// 任意一波落在「对端瞄准点槽位存活（SYN_SENT 重传窗）」时段即成交；死波（RST/超预算）
+    /// 由下一波接替，直至胜出（池销毁取消）或窗口收尾。L 槽规则：在飞的 L 槽 connect 已结束
+    /// 才由本波首条重新 bind L（在飞时重绑=重复四元组被 OS 拒；已建立后重绑同理拒但无害）。
+    /// 子任务由本循环收口：胜出/收尾取消后统一 await，异常不外冒（DisposeAsync 经 _connects 级联等待）。</summary>
+    private async Task VolleyAsync(IPAddress? bindAddress, int localPortL, IPEndPoint target,
+        int concurrency, Func<CancellationToken, Task>? gate, TimeSpan waveInterval)
+    {
+        var children = new List<Task>();
+        Task? lSlot = null;
+        try
+        {
+            if (gate is not null) await gate(_cts.Token);
+            while (true)
+            {
+                var wave = Interlocked.Increment(ref _waves);
+                for (var i = 0; i < concurrency; i++)
+                {
+                    var useL = i == 0 && (lSlot is null || lSlot.IsCompleted);
+                    var s = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                    SetPunchReuse(s);
+                    s.Bind(new IPEndPoint(bindAddress ?? IPAddress.Any, useL ? localPortL : 0));
+                    if (wave == 1 && useL)
+                        _firstConnectLocalPort = ((IPEndPoint)s.LocalEndPoint!).Port;
+                    var slot = ConnectOneAsync(s, target);
+                    if (useL) lSlot = slot;
+                    children.Add(slot);
+                }
+                await Task.Delay(waveInterval, _cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { /* 胜出/窗口收尾 */ }
+        finally
+        {
+            foreach (var t in children) { try { await t; } catch { /* 取消路径 */ } }
+        }
+    }
 
     private async Task ConnectOneAsync(Socket s, IPEndPoint target)
     {

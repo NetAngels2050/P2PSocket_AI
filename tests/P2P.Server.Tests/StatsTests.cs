@@ -81,11 +81,12 @@ public sealed class StatsTests : IAsyncLifetime
         return (client, ack.DeviceId);
     }
 
-    /// <summary>同步栅：Heartbeat 往返——Ack 到达时该连接此前发送的全部消息已处理完毕。</summary>
+    /// <summary>同步栅：Heartbeat 往返——Ack 到达时该连接此前发送的全部消息已处理完毕。
+    /// Ack 前的异步推送帧跳过（0x77 齐射锚点随 0x76 恒至——严格接收会把它按 HeartbeatAck 解码失败）。</summary>
     private static async Task SyncAsync(TestPcpClient client)
     {
         await client.SendAsync(new Heartbeat(client.NextSeq(), client.Now(), MsgType.Heartbeat));
-        Assert.NotNull(await client.ReceiveAsync<HeartbeatAck>());
+        Assert.NotNull(await client.ReceiveSkippingPushesAsync<HeartbeatAck>(skipPunchFire: true));
     }
 
     /// <summary>跑完两段式信令（0x70→0x71→0x76→延后 Ack）返回 sessionId——会话落台账供 0x72 解析。</summary>

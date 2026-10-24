@@ -190,6 +190,12 @@ public sealed class SignalingCoordinator : IAsyncDisposable
             PeerLocalCandidates: msg.LocalCandidates);
         await SafePushAsync(s.Initiator, ack); // A 中途掉线：无接收方，静默
 
+        // ③ 齐射锚点（02 §5.2⑤）：与 Ack 同刻推给 B——两端各以消息到达为锚倒数同一 Δ 到点齐射，
+        //    开火时刻差≈两条控制消息的投递时差（远小于对端 RTT）→ SYN 空中交叉，规避
+        //    「B 结构性早打 A 空门」竞态。B 未收到（掉线/旧端）由其等待器超时兜底，行为同旧版
+        await SafePushAsync(s.Target, new PunchFire(s.Target.NextSeq(), s.Target.ServerTimestamp(),
+            MsgType.PunchFire, s.SessionId));
+
         await ProcessQueueAsync();
     }
 
